@@ -1,0 +1,34 @@
+# Core data
+pandas>=2.0
+numpy>=1.26
+pyarrow>=14.0          # parquet I/O
+scikit-learn>=1.4
+pyyaml>=6.0
+
+# Spatial (Voronoi + gNodeB aggregation)
+scipy>=1.12
+geopandas>=0.14        # optional but recommended for Voronoi clipping
+shapely>=2.0
+
+# Deep learning
+torch>=2.2
+# torch-geometric and dependencies added when STGNN is implemented:
+# torch-geometric>=2.5
+# torch-scatter torch-sparse (install separately, match torch version)
+
+# Experiment tracking
+mlflow>=2.10
+dvc>=3.0
+
+# Visualisation
+matplotlib>=3.8
+seaborn>=0.13
+plotly>=5.18           # interactive plots in notebooks
+
+# Notebooks
+jupyter>=1.0
+ipywidgets>=8.0
+
+# Testing
+pytest>=8.0
+pytest-cov>=4.0

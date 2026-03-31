@@ -1,0 +1,101 @@
+# ============================================================
+# UPF Traffic Forecaster — Runtime Parameters
+# All tunable values live here. Never hardcode in source.
+# ============================================================
+
+# --- NetMob dataset ---
+netmob:
+  time_step_s: 900           # 15-min bins (96 slots/day)
+  # Values are privacy-preserving aggregate indicators — dimensionless, no physical unit.
+  # Normalisation is computed from the data itself (see preprocess → normalization).
+
+# --- Lyon grid (NetMob 100×100 m tiles) ---
+# tile_id = row * n_cols + col
+# Origin = top-left corner of tile (row=0, col=0), in WGS84
+grid:
+  n_cols: 287
+  n_rows: 426               # ceil(122032 / 287) = 426
+  tile_size_m: 100
+  # Geographic origin (top-left of tile row=0, col=0)
+  # TODO: confirm from NetMob dataset documentation or calibration point
+  origin_lat: 46.062        # approximate — northern edge of Lyon region
+  origin_lon: 4.637         # approximate — western edge
+  # Projection: tiles run South (lat decreases with row) and East (lon increases with col)
+
+# --- Base station (gNodeB) aggregation ---
+aggregation:
+  bs_csv: data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
+  bs_encoding: latin-1
+  # Bounding box to filter sites to Lyon area
+  bbox:
+    lat_min: 45.60
+    lat_max: 45.90
+    lon_min: 4.70
+    lon_max: 5.05
+  method: voronoi             # voronoi | knn (k nearest base stations)
+  voronoi_clip: true          # clip Voronoi cells to bbox
+  min_tiles_per_bs: 1         # drop BSs with fewer assigned tiles
+
+# --- Preprocessing ---
+preprocess:
+  resample_interval: null          # null = keep native 15-min
+  cells_subset: null               # null = all cells; list of tile_ids to restrict
+  fill_missing: ffill
+  min_valid_fraction: 0.80
+  # Normalisation: dl_norm = raw_value / scale_factor
+  # scale_factor is saved to data/netmob/processed/metadata.json
+  normalization: global_max        # global_max | percentile
+  normalization_percentile: 99.9   # used only when normalization=percentile
+
+# --- Feature engineering ---
+features:
+  # Temporal lag features (number of 15-min slots back)
+  lags: [1, 2, 3, 4, 8, 96, 192]   # 15m, 30m, 45m, 1h, 2h, 1d, 2d back
+  # Cyclic time encodings added automatically: hour_sin/cos, dow_sin/cos
+  include_time_features: true
+  # Normalisation of input features
+  scaler: standard            # standard | minmax | none
+
+# --- LSTM model ---
+lstm:
+  seq_len: 96                 # input sequence length (96 slots = 24 h lookback)
+  horizon: 4                  # forecast horizon (4 slots = 1 h ahead)
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.2
+  bidirectional: false
+
+# --- STGNN model (future) ---
+stgnn:
+  seq_len: 96
+  horizon: 4
+  hidden_size: 64
+  num_layers: 2
+  # Graph construction
+  edge_method: knn            # knn | threshold_distance
+  k_neighbors: 8              # for knn
+  distance_threshold_m: 2000  # for threshold_distance
+
+# --- Training ---
+training:
+  model: lstm                 # lstm | stgnn
+  epochs: 100
+  batch_size: 64
+  lr: 0.001
+  lr_scheduler: cosine        # cosine | step | none
+  early_stopping_patience: 10
+  val_fraction: 0.15          # fraction of dates used for validation
+  test_fraction: 0.15         # held-out test set (latest dates)
+  seed: 42
+  device: auto                # auto | cpu | cuda | mps
+
+# --- Evaluation ---
+evaluation:
+  metrics: [mae, rmse, mape]
+  # SLA-relevant threshold: flag when predicted vs actual diverges by > X%
+  sla_threshold_pct: 20.0
+
+# --- Forecast output ---
+forecast:
+  horizon: 4                  # slots ahead (matches training.horizon)
+  output_dir: results/forecasts

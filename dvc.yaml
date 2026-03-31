@@ -1,0 +1,70 @@
+stages:
+
+  preprocess:
+    cmd: python -m src.preprocess data/netmob/raw data/netmob/processed
+    deps:
+      - src/preprocess.py
+      - src/netmob_loader.py
+      - data/netmob/raw
+    params:
+      - params.yaml:
+          - netmob
+          - preprocess
+    outs:
+      - data/netmob/processed
+
+  build_graph:
+    cmd: python -m src.aggregate
+    deps:
+      - src/aggregate.py
+      - data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
+      - data/netmob/processed
+    params:
+      - params.yaml:
+          - grid
+          - aggregation
+    outs:
+      - data/graphs/voronoi_map.parquet
+      - data/graphs/bs_locations.parquet
+
+  train:
+    cmd: python -m src.train
+    deps:
+      - src/train.py
+      - src/dataset.py
+      - src/features.py
+      - src/models/lstm.py
+      - src/evaluate.py
+      - data/netmob/processed
+      - data/graphs/voronoi_map.parquet
+    params:
+      - params.yaml:
+          - features
+          - lstm
+          - training
+    outs:
+      - models/best_model.pt
+      - models/scaler.pkl
+    metrics:
+      - results/metrics_train.json:
+          cache: false
+
+  evaluate:
+    cmd: python -m src.evaluate
+    deps:
+      - src/evaluate.py
+      - src/forecast.py
+      - models/best_model.pt
+      - models/scaler.pkl
+      - data/netmob/processed
+      - data/graphs/voronoi_map.parquet
+    params:
+      - params.yaml:
+          - evaluation
+          - forecast
+    metrics:
+      - results/metrics_test.json:
+          cache: false
+    plots:
+      - results/forecast_plots/:
+          cache: false

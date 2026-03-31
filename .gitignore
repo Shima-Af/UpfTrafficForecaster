@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+
+# DVC
+/data/netmob/raw/
+/data/netmob/processed/
+*.dvc
+!.dvcignore
+
+# MLflow
+mlruns/
+
+# Results (versioned by DVC)
+results/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Models (copied from Phase 1, large)
+models/*.pkl
+models/*.joblib
