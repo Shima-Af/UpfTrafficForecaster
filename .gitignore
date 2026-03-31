@@ -17,6 +17,5 @@ results/
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Models (copied from Phase 1, large)
-models/*.pkl
-models/*.joblib
+# Models — trained checkpoints (DVC-tracked when they exist)
+models/
