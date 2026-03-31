@@ -10,6 +10,7 @@ venv/
 /data/netmob/processed/
 *.dvc
 !.dvcignore
+!.dvc/
 
 # MLflow
 mlruns/
