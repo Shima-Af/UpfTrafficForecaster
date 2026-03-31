@@ -17,6 +17,7 @@ stages:
     cmd: python -m src.aggregate
     deps:
       - src/aggregate.py
+      - data/netmob/raw/Lyon/Lyon.geojson
       - data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
       - data/netmob/processed
     params:

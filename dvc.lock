@@ -33,3 +33,52 @@ stages:
       md5: 0fcd4bbb396f93266388183f2e967500.dir
       size: 1928958618
       nfiles: 79
+  build_graph:
+    cmd: python -m src.aggregate
+    deps:
+    - path: data/netmob/processed
+      hash: md5
+      md5: 0fcd4bbb396f93266388183f2e967500.dir
+      size: 1928958618
+      nfiles: 79
+    - path: data/netmob/raw/Lyon/Lyon.geojson
+      hash: md5
+      md5: e14bff83acfd4a33f9dd84258f7008db
+      size: 55536234
+    - path: data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
+      hash: md5
+      md5: 8d2b3a1bd183c9395dc558323f125947
+      size: 993103
+    - path: src/aggregate.py
+      hash: md5
+      md5: 9316d2ee559124ed034244cf3807fe59
+      size: 9197
+    params:
+      params.yaml:
+        aggregation:
+          geojson_path: data/netmob/raw/Lyon/Lyon.geojson
+          bs_csv: data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
+          bs_encoding: latin-1
+          bbox:
+            lat_min: 45.6
+            lat_max: 45.9
+            lon_min: 4.7
+            lon_max: 5.05
+          method: voronoi
+          voronoi_clip: true
+          min_tiles_per_bs: 1
+        grid:
+          n_cols: 287
+          n_rows: 426
+          tile_size_m: 100
+          origin_lat: 46.062
+          origin_lon: 4.637
+    outs:
+    - path: data/graphs/bs_locations.parquet
+      hash: md5
+      md5: ed0c9f76c1c76717b8ef55133251c75e
+      size: 20484
+    - path: data/graphs/voronoi_map.parquet
+      hash: md5
+      md5: 1d5bdf37b9e235e148688f957ab0bc4c
+      size: 358059

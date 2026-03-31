@@ -24,6 +24,7 @@ grid:
 
 # --- Base station (gNodeB) aggregation ---
 aggregation:
+  geojson_path: data/netmob/raw/Lyon/Lyon.geojson
   bs_csv: data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
   bs_encoding: latin-1
   # Bounding box to filter sites to Lyon area

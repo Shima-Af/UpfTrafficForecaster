@@ -6,83 +6,38 @@ Voronoi-based aggregation of NetMob 100×100 m tiles to gNodeB (base station) le
 Pipeline
 --------
 1. Load gNodeB site locations from Cartoradio CSV (filtered to Lyon bbox).
-2. Convert each tile_id to its centroid (lat, lon) using the Lyon grid config.
+2. Load tile centroids from the NetMob GeoJSON file (exact polygon coordinates).
 3. Build a Voronoi diagram: assign each tile to its nearest gNodeB site.
 4. Aggregate per-tile traffic DataFrame to per-gNodeB time series.
 
 Tile geometry
 -------------
 tile_id = row * n_cols + col
-Centroid lat/lon computed from grid origin (params.yaml → grid section).
-Tiles run South↓ (lat decreases with row) and East→ (lon increases with col).
-100 m tile ≈ 0.000899° lat, ≈ 0.001272° lon at latitude 45.75°.
+Tile centroids are read directly from the NetMob GeoJSON file (Lyon.geojson),
+which contains the exact polygon for every tile. No grid-origin formula is used.
 
 Public API
 ----------
-load_base_stations(params)  -> GeoDataFrame (site_id, lon, lat, geometry)
-build_tile_centroids(tile_ids, params) -> GeoDataFrame (tile_id, row, col, geometry)
+load_base_stations(params)          -> pd.DataFrame (site_id, lon, lat)
+build_tile_centroids(tile_ids, params) -> pd.DataFrame (tile_id, lat, lon)
 build_voronoi_map(tile_ids, params) -> pd.Series (tile_id → site_id)
-aggregate_to_bs(df, voronoi_map) -> pd.DataFrame  (timestamp, site_id, dl_norm)
+aggregate_to_bs(df, voronoi_map)    -> pd.DataFrame (timestamp, site_id, dl_norm)
 """
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-# Optional spatial imports — graceful error if not installed
 try:
     from scipy.spatial import cKDTree
     _SCIPY_OK = True
 except ImportError:
     _SCIPY_OK = False
-
-try:
-    import geopandas as gpd
-    from shapely.geometry import Point, box
-    from shapely.ops import voronoi_diagram
-    from shapely.geometry import MultiPoint
-    _GEO_OK = True
-except ImportError:
-    _GEO_OK = False
-
-
-# ---------------------------------------------------------------------------
-# Coordinate helpers
-# ---------------------------------------------------------------------------
-
-# Approximate degrees per 100 m at latitude ~45.75°
-_DEG_LAT_PER_100M = 100 / 111_320          # ≈ 0.000899°
-_LAT_REF          = 45.75                  # reference latitude for lon scaling
-_DEG_LON_PER_100M = 100 / (111_320 * math.cos(math.radians(_LAT_REF)))  # ≈ 0.001272°
-
-
-def tile_id_to_rowcol(tile_ids: np.ndarray, n_cols: int) -> tuple[np.ndarray, np.ndarray]:
-    """Split tile_id into (row, col) arrays."""
-    rows = tile_ids // n_cols
-    cols = tile_ids % n_cols
-    return rows, cols
-
-
-def rowcol_to_latlon(
-    rows: np.ndarray,
-    cols: np.ndarray,
-    origin_lat: float,
-    origin_lon: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Convert grid (row, col) to tile centroid (lat, lon).
-
-    Origin is the top-left corner of tile (0, 0).
-    Centroid = origin + (col + 0.5) * tile_size_lon  [East]
-                       - (row + 0.5) * tile_size_lat  [South]
-    """
-    lat = origin_lat - (rows + 0.5) * _DEG_LAT_PER_100M
-    lon = origin_lon + (cols + 0.5) * _DEG_LON_PER_100M
-    return lat, lon
 
 
 # ---------------------------------------------------------------------------
@@ -131,25 +86,36 @@ def load_base_stations(params: dict) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Build tile centroids
+# Build tile centroids from GeoJSON
 # ---------------------------------------------------------------------------
 
 def build_tile_centroids(tile_ids: np.ndarray, params: dict) -> pd.DataFrame:
     """
-    Compute centroid lat/lon for each tile_id.
+    Load exact tile centroids from the NetMob GeoJSON file.
 
-    Returns DataFrame with columns: tile_id, row, col, lat, lon
+    Each feature in the GeoJSON is a polygon; the centroid is the mean of
+    its vertices. This is geographically exact — no grid-origin formula.
+
+    Returns DataFrame with columns: tile_id, lat, lon
+    Only tiles present in tile_ids are returned.
     """
-    grid = params["grid"]
-    rows, cols = tile_id_to_rowcol(tile_ids, grid["n_cols"])
-    lat, lon = rowcol_to_latlon(rows, cols, grid["origin_lat"], grid["origin_lon"])
-    return pd.DataFrame({
-        "tile_id": tile_ids,
-        "row":     rows,
-        "col":     cols,
-        "lat":     lat,
-        "lon":     lon,
-    })
+    geojson_path = Path(params["aggregation"]["geojson_path"])
+    with open(geojson_path, encoding="utf-8") as f:
+        geojson = json.load(f)
+
+    tile_id_set = set(tile_ids.tolist())
+    rows = []
+    for feature in geojson["features"]:
+        tid = int(feature["properties"]["tile_id"])
+        if tid not in tile_id_set:
+            continue
+        # Outer ring; last point repeats first — exclude it
+        coords = feature["geometry"]["coordinates"][0][:-1]
+        lon_c = sum(c[0] for c in coords) / len(coords)
+        lat_c = sum(c[1] for c in coords) / len(coords)
+        rows.append({"tile_id": tid, "lat": lat_c, "lon": lon_c})
+
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -172,19 +138,18 @@ def build_voronoi_map(tile_ids: np.ndarray, params: dict) -> pd.Series:
     if not _SCIPY_OK:
         raise ImportError("scipy is required for Voronoi mapping: pip install scipy")
 
-    bs_df     = load_base_stations(params)
-    tile_df   = build_tile_centroids(tile_ids, params)
+    bs_df   = load_base_stations(params)
+    tile_df = build_tile_centroids(tile_ids, params)
 
-    # Project to approximate flat metric coords (metres) for KD-tree
-    # Simple equirectangular: good enough for ~30 km area
-    lat_ref = params["grid"]["origin_lat"] - params["grid"]["n_rows"] / 2 * _DEG_LAT_PER_100M
+    # Use mean tile latitude as reference for equirectangular projection
+    lat_ref = float(tile_df["lat"].mean())
     bs_xy   = _latlon_to_xy(bs_df["lat"].values,  bs_df["lon"].values,  lat_ref)
     tile_xy = _latlon_to_xy(tile_df["lat"].values, tile_df["lon"].values, lat_ref)
 
-    tree         = cKDTree(bs_xy)
-    _, indices   = tree.query(tile_xy, k=1)
+    tree       = cKDTree(bs_xy)
+    _, indices = tree.query(tile_xy, k=1)
 
-    min_tiles = params["aggregation"].get("min_tiles_per_bs", 1)
+    min_tiles      = params["aggregation"].get("min_tiles_per_bs", 1)
     assigned_sites = bs_df.iloc[indices]["site_id"].values
 
     result = pd.Series(assigned_sites, index=tile_df["tile_id"].values, name="site_id")
@@ -242,8 +207,57 @@ def _latlon_to_xy(
     lon: np.ndarray,
     lat_ref: float,
 ) -> np.ndarray:
-    """Equirectangular projection → (x_m, y_m) relative to lat_ref."""
-    R = 6_371_000  # Earth radius in metres
-    x = np.radians(lon) * R * math.cos(math.radians(lat_ref))
-    y = np.radians(lat) * R
+    """Equirectangular projection → (x_m, y_m). Good enough for a ~30 km area."""
+    earth_radius_m = 6_371_000
+    x = np.radians(lon) * earth_radius_m * math.cos(math.radians(lat_ref))
+    y = np.radians(lat) * earth_radius_m
     return np.column_stack([x, y])
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point (DVC stage: python -m src.aggregate)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+    import yaml
+
+    params_path   = "params.yaml"
+    processed_dir = Path("data/netmob/processed")
+    out_dir       = Path("data/graphs")
+
+    with open(params_path, encoding="utf-8") as fh:
+        cfg_params = yaml.safe_load(fh)
+
+    # Collect all unique tile_ids from processed parquets (cell_id column only)
+    print("[aggregate] Scanning processed parquets for tile IDs...")
+    parquet_files = sorted(processed_dir.glob("*.parquet"))
+    if not parquet_files:
+        print(f"[aggregate] ERROR: No parquets found in {processed_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    tile_id_sets = [
+        pd.read_parquet(p, columns=["cell_id"])["cell_id"].unique()
+        for p in parquet_files
+    ]
+    all_tile_ids = np.unique(np.concatenate(tile_id_sets))
+    print(f"[aggregate] {len(all_tile_ids)} unique tile IDs across {len(parquet_files)} days")
+
+    # Build Voronoi map
+    voronoi_result = build_voronoi_map(all_tile_ids, cfg_params)
+
+    # Load BS locations (filtered to bbox) for saving
+    bs_result = load_base_stations(cfg_params)
+
+    # Save outputs
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    voronoi_df = voronoi_result.reset_index()
+    voronoi_df.columns = ["tile_id", "site_id"]
+    voronoi_df.to_parquet(out_dir / "voronoi_map.parquet", index=False, compression="snappy")
+    print(f"[aggregate] Saved voronoi_map.parquet  ({len(voronoi_df)} rows)")
+
+    bs_result.to_parquet(out_dir / "bs_locations.parquet", index=False, compression="snappy")
+    print(f"[aggregate] Saved bs_locations.parquet ({len(bs_result)} base stations)")
+
+    print("[aggregate] Done.")
