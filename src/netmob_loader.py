@@ -36,8 +36,7 @@ load_traces(raw_dir, params) -> pd.DataFrame
 
 from __future__ import annotations
 
-import re
-from datetime import date, timedelta
+import re  # used in load_day for date_str detection
 from pathlib import Path
 from typing import Sequence
 
@@ -60,12 +59,11 @@ def parse_file(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     -------
     cell_ids : int64 array, shape (n_cells,)
     traffic  : float32 array, shape (n_cells, n_slots)
-               Values in kbits per 15-min slot.
+               Dimensionless privacy-preserving aggregate values.
     """
-    path = Path(path)
-    raw = np.loadtxt(path, dtype=np.float64)   # shape (n_cells, 1 + n_slots)
+    raw = pd.read_csv(path, sep=" ", header=None, dtype=np.float32).values
     cell_ids = raw[:, 0].astype(np.int64)
-    traffic = raw[:, 1:].astype(np.float32)
+    traffic  = raw[:, 1:]
     return cell_ids, traffic
 
 
@@ -81,8 +79,7 @@ def _make_timestamps(date_str: str) -> list[pd.Timestamp]:
         pre  = [d + pd.Timedelta(minutes=15 * i) for i in range(8)]
         post = [d + pd.Timedelta(hours=3, minutes=15 * i) for i in range(84)]
         return pre + [None] * 4 + post    # 96 entries, 4 None gaps
-    else:
-        return [d + pd.Timedelta(minutes=15 * i) for i in range(96)]
+    return [d + pd.Timedelta(minutes=15 * i) for i in range(96)]
 
 
 def load_day(
