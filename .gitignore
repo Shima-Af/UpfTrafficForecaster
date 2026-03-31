@@ -5,10 +5,8 @@ __pycache__/
 .venv/
 venv/
 
-# DVC — ignore actual data, NOT the pointer files or config dir
-/data/netmob/raw/
-/data/netmob/processed/
-/data/graphs/
+# DVC — data directories are managed by DVC's own .gitignore files
+# Do NOT manually ignore data/ paths here — dvc add handles that automatically
 
 # MLflow
 mlruns/
