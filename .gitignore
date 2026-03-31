@@ -5,12 +5,10 @@ __pycache__/
 .venv/
 venv/
 
-# DVC
+# DVC — ignore actual data, NOT the pointer files or config dir
 /data/netmob/raw/
 /data/netmob/processed/
-*.dvc
-!.dvcignore
-!.dvc/
+/data/graphs/
 
 # MLflow
 mlruns/
