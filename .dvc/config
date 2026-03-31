@@ -1,0 +1,4 @@
+[core]
+    remote = s3remote
+['remote "s3remote"']
+    url = s3://upf-trafficforecaster-dvc-857754128372-eu-north-1-an
