@@ -99,3 +99,12 @@ evaluation:
 forecast:
   horizon: 4                  # slots ahead (matches training.horizon)
   output_dir: results/forecasts
+
+# --- Digital Twin adapter (used by twin.py, NOT by preprocessing) ---
+# c_max defines the deployment scenario: dl_norm=1.0 corresponds to c_max Gbps.
+# Set once per simulation scenario. Has no effect on how NetMob is normalised.
+adapter:
+  c_max_dl_gbps: 10.0         # rated DL capacity of the UPF deployment (Gbps)
+  c_max_ul_gbps: 10.0         # rated UL capacity
+  avg_packet_size_bytes: 1250 # assumed average packet size (matches lab config)
+  interval_sec: 3             # measurement interval (matches lab config)
