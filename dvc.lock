@@ -1,0 +1,35 @@
+schema: '2.0'
+stages:
+  preprocess:
+    cmd: python -m src.preprocess data/netmob/raw data/netmob/processed
+    deps:
+    - path: data/netmob/raw
+      hash: md5
+      md5: f5e78549d95dae648cf9b31e94b974b4.dir
+      size: 5758810141
+      nfiles: 235
+    - path: src/netmob_loader.py
+      hash: md5
+      md5: 3994b3aecfc0956d84f45912e924030f
+      size: 8024
+    - path: src/preprocess.py
+      hash: md5
+      md5: 4d23740811bd5b79a1cdaff7dc273434
+      size: 10215
+    params:
+      params.yaml:
+        netmob:
+          time_step_s: 900
+        preprocess:
+          resample_interval:
+          cells_subset:
+          fill_missing: ffill
+          min_valid_fraction: 0.8
+          normalization: global_max
+          normalization_percentile: 99.9
+    outs:
+    - path: data/netmob/processed
+      hash: md5
+      md5: 0fcd4bbb396f93266388183f2e967500.dir
+      size: 1928958618
+      nfiles: 79
