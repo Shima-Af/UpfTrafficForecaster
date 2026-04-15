@@ -19,3 +19,6 @@ results/
 
 # Models — trained checkpoints (DVC-tracked when they exist)
 models/
+
+# Reports — thesis LaTeX source, figures, and compiled PDFs
+reports/
