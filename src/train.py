@@ -92,21 +92,14 @@ def run(processed_dir: Path, models_dir: Path, results_dir: Path, params: dict) 
     device = get_device(tp["device"])
     print(f"[train] Device: {device}")
 
-    # ---- Build Voronoi map ----
+    # ---- Load Voronoi map (produced by build_graph DVC stage) ----
     voronoi_map_path = Path("data/graphs/voronoi_map.parquet")
-    if voronoi_map_path.exists():
-        import pandas as pd
-        voronoi_map = pd.read_parquet(voronoi_map_path).squeeze()
-        voronoi_map.index.name = None
-    else:
-        print("[train] Building Voronoi map (first run)...")
-        import numpy as np
-        import pandas as pd
-        sample_pq = next(sorted(processed_dir.glob("*.parquet")))
-        tile_ids = pd.read_parquet(sample_pq)["cell_id"].unique()
-        voronoi_map = build_voronoi_map(tile_ids.astype(np.int64), params)
-        voronoi_map_path.parent.mkdir(parents=True, exist_ok=True)
-        voronoi_map.to_frame().to_parquet(voronoi_map_path)
+    if not voronoi_map_path.exists():
+        raise FileNotFoundError(
+            f"{voronoi_map_path} not found. Run 'dvc repro build_graph' first."
+        )
+    voronoi_map = pd.read_parquet(voronoi_map_path).squeeze()
+    voronoi_map.index.name = None
 
     # ---- Build datasets ----
     print("[train] Building datasets...")

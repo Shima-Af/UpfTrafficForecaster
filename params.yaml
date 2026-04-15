@@ -33,9 +33,11 @@ aggregation:
     lat_max: 45.90
     lon_min: 4.70
     lon_max: 5.05
-  method: voronoi             # voronoi | knn (k nearest base stations)
-  voronoi_clip: true          # clip Voronoi cells to bbox
+  method: voronoi             # voronoi | knn (tile-to-BS assignment method)
   min_tiles_per_bs: 1         # drop BSs with fewer assigned tiles
+  # Spatial graph edge construction (for STGNN)
+  edge_method: voronoi_border # voronoi_border | knn
+  k_neighbors: 8              # used only when edge_method=knn
 
 # --- Preprocessing ---
 preprocess:

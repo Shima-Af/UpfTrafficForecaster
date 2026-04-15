@@ -1,25 +1,11 @@
 stages:
 
-  preprocess:
-    cmd: python -m src.preprocess data/netmob/raw data/netmob/processed
-    deps:
-      - src/preprocess.py
-      - src/netmob_loader.py
-      - data/netmob/raw
-    params:
-      - params.yaml:
-          - netmob
-          - preprocess
-    outs:
-      - data/netmob/processed
-
   build_graph:
     cmd: python -m src.aggregate
     deps:
       - src/aggregate.py
       - data/netmob/raw/Lyon/Lyon.geojson
       - data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
-      - data/netmob/processed
     params:
       - params.yaml:
           - grid
@@ -27,6 +13,21 @@ stages:
     outs:
       - data/graphs/voronoi_map.parquet
       - data/graphs/bs_locations.parquet
+      - data/graphs/graph_edges.parquet
+
+  preprocess:
+    cmd: python -m src.preprocess data/netmob/raw data/netmob/processed data/graphs
+    deps:
+      - src/preprocess.py
+      - src/netmob_loader.py
+      - data/netmob/raw
+      - data/graphs/voronoi_map.parquet
+    params:
+      - params.yaml:
+          - netmob
+          - preprocess
+    outs:
+      - data/netmob/processed
 
   train:
     cmd: python -m src.train
@@ -37,7 +38,6 @@ stages:
       - src/models/lstm.py
       - src/evaluate.py
       - data/netmob/processed
-      - data/graphs/voronoi_map.parquet
     params:
       - params.yaml:
           - features
@@ -58,7 +58,6 @@ stages:
       - models/best_model.pt
       - models/scaler.pkl
       - data/netmob/processed
-      - data/graphs/voronoi_map.parquet
     params:
       - params.yaml:
           - evaluation

@@ -1,8 +1,13 @@
 schema: '2.0'
 stages:
   preprocess:
-    cmd: python -m src.preprocess data/netmob/raw data/netmob/processed
+    cmd: python -m src.preprocess data/netmob/raw data/netmob/processed 
+      data/graphs
     deps:
+    - path: data/graphs/voronoi_map.parquet
+      hash: md5
+      md5: 2617a6f66b0cbe2a52e0fd50f57bd451
+      size: 333376
     - path: data/netmob/raw
       hash: md5
       md5: f5e78549d95dae648cf9b31e94b974b4.dir
@@ -14,8 +19,8 @@ stages:
       size: 8024
     - path: src/preprocess.py
       hash: md5
-      md5: 4d23740811bd5b79a1cdaff7dc273434
-      size: 10215
+      md5: a277f6f2409212f608689d106cafc6cf
+      size: 13063
     params:
       params.yaml:
         netmob:
@@ -30,17 +35,12 @@ stages:
     outs:
     - path: data/netmob/processed
       hash: md5
-      md5: 0fcd4bbb396f93266388183f2e967500.dir
-      size: 1928958618
+      md5: 7f4dddb0cf8ccda38231d989af4fe0c6.dir
+      size: 132446150
       nfiles: 79
   build_graph:
     cmd: python -m src.aggregate
     deps:
-    - path: data/netmob/processed
-      hash: md5
-      md5: 0fcd4bbb396f93266388183f2e967500.dir
-      size: 1928958618
-      nfiles: 79
     - path: data/netmob/raw/Lyon/Lyon.geojson
       hash: md5
       md5: e14bff83acfd4a33f9dd84258f7008db
@@ -51,8 +51,8 @@ stages:
       size: 993103
     - path: src/aggregate.py
       hash: md5
-      md5: 9316d2ee559124ed034244cf3807fe59
-      size: 9197
+      md5: 5c26b079b196050d8c00fbf558d4ec70
+      size: 22603
     params:
       params.yaml:
         aggregation:
@@ -65,8 +65,9 @@ stages:
             lon_min: 4.7
             lon_max: 5.05
           method: voronoi
-          voronoi_clip: true
           min_tiles_per_bs: 1
+          edge_method: voronoi_border
+          k_neighbors: 8
         grid:
           n_cols: 287
           n_rows: 426
@@ -76,9 +77,13 @@ stages:
     outs:
     - path: data/graphs/bs_locations.parquet
       hash: md5
-      md5: ed0c9f76c1c76717b8ef55133251c75e
-      size: 20484
+      md5: 9ed38632e61f671e7097a4ddadde1523
+      size: 17836
+    - path: data/graphs/graph_edges.parquet
+      hash: md5
+      md5: 09912c02dbbca58e8380d4c396375d44
+      size: 36776
     - path: data/graphs/voronoi_map.parquet
       hash: md5
-      md5: 1d5bdf37b9e235e148688f957ab0bc4c
-      size: 358059
+      md5: dec6132e0775c4cb0204bcb518187f10
+      size: 358284

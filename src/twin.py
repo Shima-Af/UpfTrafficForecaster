@@ -59,8 +59,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_params() -> dict:
-    with open(_PROJECT_ROOT / "params.yaml") as f:
-        return yaml.safe_load(f)["train"]
+    with open(_PROJECT_ROOT / "params.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,7 +215,7 @@ class DigitalTwin:
         if params is None:
             params = _load_params()
 
-        with open(manifest_path) as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
 
         l1_targets = params["layer1_targets"]

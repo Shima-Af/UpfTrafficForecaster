@@ -24,6 +24,7 @@ dvc>=3.0
 matplotlib>=3.8
 seaborn>=0.13
 plotly>=5.18           # interactive plots in notebooks
+contextily>=1.4        # basemap tiles (OSM, Stamen, …) for matplotlib/geopandas
 
 # Notebooks
 jupyter>=1.0

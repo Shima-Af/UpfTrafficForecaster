@@ -1,7 +1,16 @@
 """
 preprocess.py
 -------------
-DVC pipeline stage: raw NetMob → cleaned, normalised Parquet.
+DVC pipeline stage: raw NetMob tiles → BS-level normalised Parquet.
+
+Pipeline
+--------
+1. Load Voronoi map (output of build_graph stage).
+2. For each day and service:
+   a. Parse raw tile-level .txt file.
+   b. Aggregate tiles to BS level (sum over each Voronoi cell).
+   c. Normalise with a per-service global-max scale factor.
+3. Write one Parquet per day containing all services.
 
 Input layout
 ------------
@@ -12,21 +21,21 @@ Output layout
 data/netmob/processed/
     {city}_{YYYYMMDD}.parquet  — one file per day
     manifest.csv               — summary per processed day
-    metadata.json              — global scale factor used for dl_norm
+    metadata.json              — per-service scale factors
 
 Each parquet schema
 -------------------
 timestamp  : datetime64[ns]   (local Paris naive time, 15-min resolution)
-cell_id    : int64
-dl_norm    : float32           (dimensionless ∈ [0, 1], scaled by global max)
-ul_norm    : float32           (0.0 — DL-only dataset)
+site_id    : str              (gNodeB identifier from Cartoradio)
+service    : str              (DailyMotion | Netflix | YouTube)
+dl_norm    : float32          (dimensionless ∈ [0,1], scaled by per-service global max)
 
 Normalisation
 -------------
-Raw NetMob values are privacy-preserving aggregate indicators with no physical
-unit. dl_norm = raw_value / global_scale, where global_scale is the dataset-wide
-maximum (or configurable percentile) computed in a first pass over all files.
-The scale factor is saved to metadata.json for reproducibility.
+dl_norm = bs_raw_sum / service_scale
+where bs_raw_sum is the sum of raw tile values within the Voronoi cell of each BS,
+and service_scale is the dataset-wide maximum of those sums for that service.
+Scale factors are saved to metadata.json.
 
 DST handling (20190331)
 -----------------------
@@ -34,7 +43,7 @@ File has 92 slots; 4 missing slots (02:00–02:45 local) are filled with 0.
 
 CLI usage
 ---------
-python -m src.preprocess [raw_dir] [out_dir]
+python -m src.preprocess [raw_dir] [out_dir] [graphs_dir]
 """
 
 from __future__ import annotations
@@ -60,101 +69,128 @@ from src.netmob_loader import (
 
 
 # ---------------------------------------------------------------------------
-# Per-day processing  (returns raw values — normalisation applied in run())
+# Aggregate raw tile traffic to BS level
 # ---------------------------------------------------------------------------
 
-def _parse_day_raw(
+def _aggregate_to_bs(
+    cell_ids: np.ndarray,
+    traffic: np.ndarray,
+    vm_series: pd.Series,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Sum tile-level raw traffic into BS-level traffic using Voronoi map.
+
+    Parameters
+    ----------
+    cell_ids  : int64 array (n_cells,)
+    traffic   : float32 array (n_cells, n_slots)
+    vm_series : Series indexed by tile_id, values = site_id
+
+    Returns
+    -------
+    site_ids   : object array of site_id strings (n_bs,)
+    bs_traffic : float32 array (n_bs, n_slots)
+    """
+    valid_mask = np.isin(cell_ids, vm_series.index)
+    cell_ids = cell_ids[valid_mask]
+    traffic  = traffic[valid_mask]
+
+    if len(cell_ids) == 0:
+        return np.array([]), np.zeros((0, traffic.shape[1]), dtype=np.float32)
+
+    assigned = vm_series.reindex(cell_ids).values   # site_id per tile
+
+    # pandas groupby sum — efficient and clean
+    df = pd.DataFrame(traffic.astype(np.float32))
+    df["site_id"] = assigned
+    agg = df.groupby("site_id", sort=True).sum()
+
+    return agg.index.values, agg.values.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Per-service single-day parser (tile level, before aggregation)
+# ---------------------------------------------------------------------------
+
+def _parse_service_raw(
     city_dir: Path,
     date_str: str,
-    services: list[str],
+    service: str,
     direction: str,
     cells_subset: list[int] | None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """
-    Parse and sum service files for one day.
+    Parse a single service file for one day.
 
-    Returns (cell_ids, traffic_sum) with raw values, or None if no files found.
-    traffic_sum shape: (n_cells, 96)
+    Returns (cell_ids, traffic) with raw tile values, or None if file absent.
+    traffic shape: (n_cells, 96)
     """
-    traffic_sum: np.ndarray | None = None
-    cell_ids_ref: np.ndarray | None = None
-
-    for svc in services:
-        day_dir = city_dir / svc / date_str
-        if not day_dir.exists():
-            continue
-        txt_files = list(day_dir.glob(f"*_{direction}.txt"))
-        if not txt_files:
-            continue
-
-        cell_ids, traffic = parse_file(txt_files[0])
-
-        # DST day: 92 slots → pad to 96 with zeros at missing positions
-        if date_str == _DST_DATE and traffic.shape[1] == _SLOTS_DST:
-            padded = np.zeros((traffic.shape[0], _SLOTS_NORMAL), dtype=np.float32)
-            real_cols = [i for i in range(_SLOTS_NORMAL) if i not in _DST_MISSING_SLOTS]
-            padded[:, real_cols] = traffic
-            traffic = padded
-
-        if traffic_sum is None:
-            cell_ids_ref = cell_ids
-            traffic_sum = traffic.copy()
-        else:
-            if not np.array_equal(cell_ids_ref, cell_ids):
-                raise ValueError(
-                    f"[{date_str}] Cell ID mismatch across services"
-                )
-            traffic_sum += traffic
-
-    if traffic_sum is None:
+    day_dir = city_dir / service / date_str
+    if not day_dir.exists():
+        return None
+    txt_files = list(day_dir.glob(f"*_{direction}.txt"))
+    if not txt_files:
         return None
 
+    cell_ids, traffic = parse_file(txt_files[0])
+
+    # DST day: 92 slots → pad to 96 with zeros at missing positions
+    if date_str == _DST_DATE and traffic.shape[1] == _SLOTS_DST:
+        padded = np.zeros((traffic.shape[0], _SLOTS_NORMAL), dtype=np.float32)
+        real_cols = [i for i in range(_SLOTS_NORMAL) if i not in _DST_MISSING_SLOTS]
+        padded[:, real_cols] = traffic
+        traffic = padded
+
     if cells_subset is not None:
-        mask = np.isin(cell_ids_ref, cells_subset)
-        cell_ids_ref = cell_ids_ref[mask]
-        traffic_sum  = traffic_sum[mask]
+        mask = np.isin(cell_ids, cells_subset)
+        cell_ids = cell_ids[mask]
+        traffic  = traffic[mask]
 
-    return cell_ids_ref, traffic_sum
+    return cell_ids, traffic
 
+
+# ---------------------------------------------------------------------------
+# Build day DataFrame from BS-level traffic
+# ---------------------------------------------------------------------------
 
 def _build_day_df(
-    cell_ids: np.ndarray,
+    site_ids: np.ndarray,
     traffic: np.ndarray,
     date_str: str,
     scale: float,
     fill_missing: str,
+    service: str,
 ) -> pd.DataFrame:
     """
-    Convert (cell_ids, raw traffic array) to a normalised long-format DataFrame.
+    Convert (site_ids, BS-level raw traffic) to a normalised long-format DataFrame.
 
-    Columns: timestamp, cell_id, dl_norm, ul_norm
+    Columns: timestamp, site_id, service, dl_norm
     """
-    dl_norm    = _scale_traffic(traffic, scale)          # (n_cells, 96)
-    timestamps = _make_timestamps(date_str)              # 96 entries, None at DST gaps
+    dl_norm    = _scale_traffic(traffic, scale)      # (n_bs, 96)
+    timestamps = _make_timestamps(date_str)          # 96 entries, None at DST gaps
 
-    valid_slots    = [(i, ts) for i, ts in enumerate(timestamps) if ts is not None]
-    slot_indices   = np.array([i  for i, _  in valid_slots], dtype=np.int32)
+    valid_slots     = [(i, ts) for i, ts in enumerate(timestamps) if ts is not None]
+    slot_indices    = np.array([i  for i, _  in valid_slots], dtype=np.int32)
     slot_timestamps = [ts          for _, ts in valid_slots]
 
-    n_cells = len(cell_ids)
+    n_bs    = len(site_ids)
     n_valid = len(valid_slots)
 
-    cid_col = np.tile(cell_ids, n_valid)                 # (n_valid * n_cells,)
-    ts_col  = np.repeat(slot_timestamps, n_cells)        # (n_valid * n_cells,)
-    dl_col  = dl_norm[:, slot_indices].T.reshape(-1)     # (n_valid * n_cells,)
+    sid_col = np.tile(site_ids, n_valid)                  # (n_valid * n_bs,)
+    ts_col  = np.repeat(slot_timestamps, n_bs)            # (n_valid * n_bs,)
+    dl_col  = dl_norm[:, slot_indices].T.reshape(-1)      # (n_valid * n_bs,)
 
     df = pd.DataFrame({
         "timestamp": ts_col,
-        "cell_id":   cid_col,
+        "site_id":   sid_col,
+        "service":   service,
         "dl_norm":   dl_col.astype(np.float32),
-        "ul_norm":   np.zeros(len(cid_col), dtype=np.float32),
     })
 
-    # Forward-fill any NaN cells on normal days (DST zeros are left as-is)
     if fill_missing == "ffill" and date_str != _DST_DATE:
         df["dl_norm"] = (
             df.sort_values("timestamp")
-              .groupby("cell_id")["dl_norm"]
+              .groupby("site_id")["dl_norm"]
               .transform(lambda x: x.ffill())
         )
 
@@ -165,56 +201,75 @@ def _build_day_df(
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def run(raw_dir: Path, out_dir: Path, params: dict) -> None:
+def run(raw_dir: Path, out_dir: Path, graphs_dir: Path, params: dict) -> None:
     """
-    Two-pass preprocessing pipeline:
-      Pass 1 — scan all raw files to compute the global scale factor.
-      Pass 2 — parse, normalise, and write one parquet per day.
+    Two-pass BS-level preprocessing pipeline:
+      Pass 1 — aggregate tiles→BS for every day/service to compute scale factors.
+      Pass 2 — aggregate, normalise, and write one parquet per day.
     """
-    pp    = params["preprocess"]
-    fill_missing   = pp.get("fill_missing", "ffill")
-    cells_subset   = pp.get("cells_subset")
-    norm_method    = pp.get("normalization", "global_max")
+    pp              = params["preprocess"]
+    fill_missing    = pp.get("fill_missing", "ffill")
+    cells_subset    = pp.get("cells_subset")
+    norm_method     = pp.get("normalization", "global_max")
     norm_percentile = pp.get("normalization_percentile", 99.9)
+
+    # Load Voronoi map produced by build_graph
+    vm_path = graphs_dir / "voronoi_map.parquet"
+    vm_df   = pd.read_parquet(vm_path)
+    vm_series = vm_df.set_index("tile_id")["site_id"]
+    print(f"[preprocess] Voronoi map: {len(vm_df):,} tiles -> "
+          f"{vm_df['site_id'].nunique()} BSs")
 
     city_dirs = [d for d in sorted(raw_dir.iterdir()) if d.is_dir()]
     if not city_dirs:
         raise FileNotFoundError(f"No city directories found under {raw_dir}")
 
     # ------------------------------------------------------------------
-    # Pass 1: compute global scale
+    # Pass 1: compute per-service scale factors at BS level
     # ------------------------------------------------------------------
-    print("[preprocess] Pass 1 — computing global scale factor...")
-    all_maxes: list[float] = []
+    print("[preprocess] Pass 1 — computing per-service BS-level scale factors...")
+    service_maxes: dict[str, list[float]] = {}
 
     for city_dir in city_dirs:
-        services = _detect_services(city_dir)
+        services  = _detect_services(city_dir)
         all_dates = _collect_dates(city_dir, services)
-        for date_str in sorted(all_dates):
-            result = _parse_day_raw(city_dir, date_str, services, "DL", cells_subset)
-            if result is not None:
-                _, traffic = result
-                all_maxes.append(float(traffic.max()))
+        for svc in services:
+            for date_str in sorted(all_dates):
+                result = _parse_service_raw(
+                    city_dir, date_str, svc, "DL", cells_subset
+                )
+                if result is None:
+                    continue
+                cell_ids, traffic = result
+                _, bs_traffic = _aggregate_to_bs(cell_ids, traffic, vm_series)
+                if len(bs_traffic) > 0:
+                    service_maxes.setdefault(svc, []).append(float(bs_traffic.max()))
 
-    if not all_maxes:
-        raise RuntimeError("No data found — cannot compute scale factor")
+    if not service_maxes:
+        raise RuntimeError("No data found — cannot compute scale factors")
 
-    if norm_method == "global_max":
-        scale = float(max(all_maxes))
-    elif norm_method == "percentile":
-        scale = float(np.percentile(all_maxes, norm_percentile))
-    else:
-        raise ValueError(f"Unknown normalization method: {norm_method}")
-
-    print(f"[preprocess] Scale factor ({norm_method}): {scale:.2f}")
+    service_scales: dict[str, float] = {}
+    for svc, maxes in service_maxes.items():
+        if norm_method == "global_max":
+            service_scales[svc] = float(max(maxes))
+        elif norm_method == "percentile":
+            service_scales[svc] = float(np.percentile(maxes, norm_percentile))
+        else:
+            raise ValueError(f"Unknown normalization method: {norm_method}")
+        print(f"[preprocess] {svc} scale ({norm_method}): {service_scales[svc]:.4f}")
 
     # Save metadata
     metadata = {
         "normalization":            norm_method,
         "normalization_percentile": norm_percentile,
-        "scale_factor":             scale,
+        "aggregation_level":        "BS (Voronoi sum)",
+        "services": {
+            svc: {"scale_factor": scale}
+            for svc, scale in service_scales.items()
+        },
         "note": (
-            "dl_norm = raw_value / scale_factor. "
+            "dl_norm = bs_tile_sum / scale_factor (per service). "
+            "bs_tile_sum = sum of raw tile values in the BS Voronoi cell. "
             "Raw NetMob values are dimensionless privacy-preserving aggregates."
         ),
     }
@@ -223,14 +278,14 @@ def run(raw_dir: Path, out_dir: Path, params: dict) -> None:
         json.dump(metadata, f, indent=2)
 
     # ------------------------------------------------------------------
-    # Pass 2: normalise and write parquets
+    # Pass 2: aggregate, normalise and write parquets
     # ------------------------------------------------------------------
-    print("[preprocess] Pass 2 — normalising and writing parquets...")
+    print("[preprocess] Pass 2 — aggregating to BS, normalising, writing parquets...")
     manifest_rows = []
 
     for city_dir in city_dirs:
-        city     = city_dir.name
-        services = _detect_services(city_dir)
+        city      = city_dir.name
+        services  = _detect_services(city_dir)
         all_dates = _collect_dates(city_dir, services)
         print(f"  City={city}  Services={services}  Days={len(all_dates)}")
 
@@ -239,26 +294,42 @@ def run(raw_dir: Path, out_dir: Path, params: dict) -> None:
             if out_path.exists():
                 continue
 
-            result = _parse_day_raw(city_dir, date_str, services, "DL", cells_subset)
-            if result is None:
-                print(f"  [warn] {date_str}: no files, skipping")
+            day_dfs: list[pd.DataFrame] = []
+            for svc in services:
+                result = _parse_service_raw(
+                    city_dir, date_str, svc, "DL", cells_subset
+                )
+                if result is None:
+                    continue
+                cell_ids, traffic = result
+                site_ids, bs_traffic = _aggregate_to_bs(cell_ids, traffic, vm_series)
+                if len(site_ids) == 0:
+                    continue
+                scale = service_scales[svc]
+                day_dfs.append(
+                    _build_day_df(
+                        site_ids, bs_traffic, date_str, scale, fill_missing, svc
+                    )
+                )
+
+            if not day_dfs:
+                print(f"  [warn] {date_str}: no data for any service, skipping")
                 continue
 
-            cell_ids, traffic = result
-            df = _build_day_df(cell_ids, traffic, date_str, scale, fill_missing)
+            df = pd.concat(day_dfs, ignore_index=True)
 
-            n_cells = df["cell_id"].nunique()
+            n_bs    = df["site_id"].nunique()
             n_slots = df["timestamp"].nunique()
             is_dst  = date_str == _DST_DATE
 
             df.to_parquet(out_path, index=False, compression="snappy")
-            print(f"  [{date_str}] cells={n_cells}  slots={n_slots}"
+            print(f"  [{date_str}] BSs={n_bs}  slots={n_slots}"
                   + ("  [DST]" if is_dst else ""))
 
             manifest_rows.append({
                 "city":     city,
                 "date":     date_str,
-                "n_cells":  n_cells,
+                "n_bs":     n_bs,
                 "n_slots":  n_slots,
                 "dst_day":  is_dst,
                 "services": ",".join(services),
@@ -266,7 +337,7 @@ def run(raw_dir: Path, out_dir: Path, params: dict) -> None:
             })
 
     pd.DataFrame(manifest_rows).to_csv(out_dir / "manifest.csv", index=False)
-    print(f"\n[preprocess] Done. {len(manifest_rows)} days → {out_dir}")
+    print(f"\n[preprocess] Done. {len(manifest_rows)} days -> {out_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -286,11 +357,12 @@ def _collect_dates(city_dir: Path, services: list[str]) -> set[str]:
 
 
 if __name__ == "__main__":
-    with open("params.yaml", encoding="utf-8") as f:
-        _params = yaml.safe_load(f)
+    with open("params.yaml", encoding="utf-8") as _fh:
+        _params = yaml.safe_load(_fh)
 
-    _raw_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/netmob/raw")
-    _out_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("data/netmob/processed")
+    _raw_dir    = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/netmob/raw")
+    _out_dir    = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("data/netmob/processed")
+    _graphs_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("data/graphs")
     _out_dir.mkdir(parents=True, exist_ok=True)
 
-    run(_raw_dir, _out_dir, _params)
+    run(_raw_dir, _out_dir, _graphs_dir, _params)
