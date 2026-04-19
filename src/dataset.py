@@ -29,23 +29,42 @@ _ONE_WEEK_SLOTS = 96 * 7   # 672 slots = 7 days at 15-min resolution
 
 def _load_bs_parquets(processed_dir) -> pd.DataFrame:
     """
-    Load all processed parquets and sum across services to get total
-    dl_norm per (site_id, timestamp).
+    Load all processed parquets and produce a single dl_norm per (site_id, timestamp)
+    that is proportional to actual traffic bytes.
 
-    The processed parquets already contain BS-level data (site_id column)
-    with one row per (timestamp, site_id, service).  aggregate_to_bs() must
-    NOT be called again — it expects raw tile data with a cell_id column.
+    Each service's dl_norm is scaled back to raw bytes using the per-service
+    scale_factor from metadata.json, then summed across services, then
+    re-normalised by the combined global max so the result is in [0, 1].
+
+    This preserves the true relative byte contribution of each service
+    (Netflix peak >> YouTube peak >> DailyMotion peak).
     """
+    import json
     from pathlib import Path
+
+    metadata_path = Path(processed_dir) / "metadata.json"
+    with open(metadata_path) as f:
+        meta = json.load(f)
+    service_scales = {svc: info["scale_factor"] for svc, info in meta["services"].items()}
+
     frames = []
     for pq in sorted(Path(processed_dir).glob("*.parquet")):
         frames.append(pd.read_parquet(pq))
     df = pd.concat(frames, ignore_index=True)
+
+    # Convert each service's dl_norm back to raw bytes, then sum across services
+    df["dl_bytes"] = df["dl_norm"] * df["service"].map(service_scales)
     df = (
-        df.groupby(["timestamp", "site_id"], sort=False)["dl_norm"]
+        df.groupby(["timestamp", "site_id"], sort=False)["dl_bytes"]
           .sum()
           .reset_index()
     )
+
+    # Re-normalise so dl_norm ∈ [0, 1] relative to the true combined peak
+    global_max = float(df["dl_bytes"].max())
+    df["dl_norm"] = (df["dl_bytes"] / global_max).astype("float32")
+    df.drop(columns="dl_bytes", inplace=True)
+
     df.sort_values(["site_id", "timestamp"], inplace=True)
     return df
 

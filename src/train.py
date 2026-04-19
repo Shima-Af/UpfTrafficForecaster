@@ -268,8 +268,10 @@ def run(processed_dir: Path, models_dir: Path, results_dir: Path, params: dict) 
     model.load_state_dict(ckpt["model_state"])
 
     if model_type == "stgnn":
-        test_metrics = evaluate_loader(model, test_loader, device, edge_index=edge_index)
+        # STGNN targets are in scaled space — pass scaler to inverse-transform before metrics
+        test_metrics = evaluate_loader(model, test_loader, device, edge_index=edge_index, scaler=scaler)
     else:
+        # LSTM targets are in original dl_norm space — no inverse-transform needed
         test_metrics = evaluate_loader(model, test_loader, device)
 
     print(f"[train] Test metrics: {test_metrics}")

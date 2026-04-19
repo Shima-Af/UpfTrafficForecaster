@@ -36,12 +36,16 @@ stages:
       - src/dataset.py
       - src/features.py
       - src/models/lstm.py
+      - src/models/stgnn.py
       - src/evaluate.py
       - data/netmob/processed
+      - data/graphs/edge_index.npy
+      - data/graphs/node_index.parquet
     params:
       - params.yaml:
           - features
           - lstm
+          - stgnn
           - training
     outs:
       - models/best_model.pt
