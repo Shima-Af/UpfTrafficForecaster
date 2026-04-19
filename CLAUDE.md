@@ -212,24 +212,37 @@ results/                            ← metrics_train.json, metrics_test.json (w
 # Match torch version to your CUDA version, e.g. CUDA 11.8:
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
-# torch-geometric (match torch + CUDA):
+# torch-geometric (match torch + CUDA version):
 pip install torch_geometric
 pip install pyg_lib torch_scatter torch_sparse torch_cluster \
     -f https://data.pyg.org/whl/torch-2.x.0+cu118.html
 
-# Remaining dependencies:
+# Remaining dependencies (includes dvc[s3] for S3 remote):
 pip install -r requirements.txt
+pip install "dvc[s3]"
 ```
 
-### Step 2 — Verify data is present
+### Step 2 — Pull data from DVC S3 remote
+
+The processed data and graph artefacts are stored in an S3 bucket.
+You need AWS credentials configured before pulling.
 
 ```bash
+# Configure AWS credentials (one-time, on the GPU server):
+aws configure
+# Enter: Access Key ID, Secret Access Key, region = eu-north-1, output = json
+
+# Then pull all DVC-tracked data:
+dvc pull
+
+# Verify:
 ls data/netmob/processed/   # should show 79 .parquet files
 ls data/graphs/              # should show voronoi_map, node_index, edge_index, etc.
 ```
 
-If processed data is missing, re-run the DVC pipeline:
+If `dvc pull` fails or AWS credentials are unavailable, re-run the pipeline from raw data:
 ```bash
+# Only if you have the raw NetMob files available locally:
 dvc repro build_graph
 dvc repro preprocess
 ```
