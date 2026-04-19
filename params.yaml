@@ -52,12 +52,18 @@ preprocess:
 
 # --- Feature engineering ---
 features:
-  # Temporal lag features (number of 15-min slots back)
-  lags: [1, 2, 3, 4, 8, 96, 192]   # 15m, 30m, 45m, 1h, 2h, 1d, 2d back
-  # Cyclic time encodings added automatically: hour_sin/cos, dow_sin/cos
+  # Only out-of-window lags: same slot yesterday (96) and 2 days ago (192)
+  lags: [96, 192]
+  # Cyclic time encodings: hour_sin/cos, dow_sin/cos, is_weekend (month dropped — only 77 days)
   include_time_features: true
   # Normalisation of input features
   scaler: standard            # standard | minmax | none
+
+# --- Data quality ---
+data_quality:
+  # Known data-collection outage days — values replaced with same-slot previous-week
+  anomaly_dates: ['20190512']
+  fill_cross_day: prev_week   # prev_week | none
 
 # --- LSTM model ---
 lstm:
@@ -68,12 +74,14 @@ lstm:
   dropout: 0.2
   bidirectional: false
 
-# --- STGNN model (future) ---
+# --- STGNN model ---
 stgnn:
   seq_len: 96
   horizon: 4
   hidden_size: 64
   num_layers: 2
+  dropout: 0.2
+  num_heads: 4                # GAT attention heads
   # Graph construction
   edge_method: knn            # knn | threshold_distance
   k_neighbors: 8              # for knn
@@ -81,7 +89,7 @@ stgnn:
 
 # --- Training ---
 training:
-  model: lstm                 # lstm | stgnn
+  model: stgnn                # lstm | stgnn
   epochs: 100
   batch_size: 64
   lr: 0.001

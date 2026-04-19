@@ -61,15 +61,29 @@ def evaluate_loader(
     loader,
     device: torch.device,
     threshold_pct: float = 20.0,
+    edge_index=None,
 ) -> dict:
-    """Run model on a DataLoader and return metric dict."""
+    """
+    Run model on a DataLoader and return metric dict.
+
+    Supports both LSTM (batch=(X,y,site)) and STGNN (batch=(X,y)) loaders.
+    Pass edge_index for STGNN; omit (or None) for LSTM.
+    """
     model.eval()
     all_pred, all_true = [], []
 
     for batch in loader:
-        X, y, site = batch
-        X, y, site = X.to(device), y.to(device), site.to(device)
-        pred = model(X, site_idx=site)
+        if edge_index is not None:
+            # STGNN batch: (X, y)  — y shape (B, N, horizon)
+            X, y = batch
+            X, y = X.to(device), y.to(device)
+            pred = model(X, edge_index)
+        else:
+            # LSTM batch: (X, y, site_idx)  — y shape (B, horizon)
+            X, y, site = batch
+            X, y, site = X.to(device), y.to(device), site.to(device)
+            pred = model(X, site_idx=site)
+
         all_pred.append(pred.cpu().numpy())
         all_true.append(y.cpu().numpy())
 
