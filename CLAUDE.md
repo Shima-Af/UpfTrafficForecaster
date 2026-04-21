@@ -19,17 +19,16 @@ AI-based Digital Twins.
 
 Phase 1 is a single-UPF system:
 - Physical testbed: DPDK vs. USR×1 vs. USR×2 UPF configurations
-- Digital Twin: MLP regressors for power consumption and QoS metrics
+- Digital Twin: 2-layer ML model (Layer 1: throughput/CPU/loss/delay regressors; Layer 2: power model via stacking)
 - PPO controller: 3-action selection (config 0/1/2)
 - Traffic forecaster: city-level LSTM (scalar ρ̂_{t+1}) fed by Netflix/Lyon aggregate
 
 **This repository (Phase 2) extends Phase 1 to distributed multi-UPF:**
 - Replace the scalar city-level LSTM with a **Spatio-Temporal Graph Neural Network (STGNN)**
   that produces per-gNodeB forecasts for all 965 gNodeBs in Lyon simultaneously
-- Cluster gNodeBs into **K=4 geographic UPF service areas** using traffic-weighted k-means
-- Run **K=4 independent PPO controllers** (one per UPF, reusing Phase 1 logic exactly)
-- PhD contribution framing: the STGNN upgrades the "Forecasting Module" box in Figure 3
-  of the Phase 1 paper, enabling the single-node controller to scale to K distributed nodes
+- Cluster gNodeBs into **K geographic UPF service areas** (K to be decided — see Section 6)
+- Run **K independent PPO controllers** (one per UPF, reusing Phase 1 logic exactly)
+- PhD contribution: STGNN upgrades the "Forecasting Module" box in Figure 3 of Phase 1 paper
 
 **Collaboration style:**
 - Shima prefers to discuss and agree on approach BEFORE implementation begins
@@ -57,11 +56,19 @@ service    : str               (DailyMotion | Netflix | YouTube)
 dl_norm    : float32           (∈ [0, 1], normalised by per-service global max)
 ```
 
+**IMPORTANT — normalization fix (implemented, do not revert):**
+The raw parquets store per-service dl_norm. Summing directly distorts relative contributions
+(0.5 Netflix ≠ 0.5 YouTube in bytes — Netflix scale_factor is 5× larger).
+Fix in `src/dataset.py:_load_bs_parquets()`: convert each service's dl_norm back to raw bytes
+using `metadata.json` scale_factors, sum across services, then re-normalise by combined global max.
+- Old (wrong): `dl_norm_total = dl_norm_Netflix + dl_norm_YouTube + dl_norm_DailyMotion`
+- New (correct): `dl_bytes = dl_norm × scale_factor` → sum → divide by combined global_max
+- City-level peak CORRECTED: **653.9 Mbps** (was 1341.5 Mbps with distorted normalization)
+- Calibration factor: **26.72 Mbps per dl_norm unit** (node-level)
+
 **Key data quality issue — May 12, 2019:**
-Data collection system outage from ~01:00 to ~18:00 on May 12. Values are near-zero
-across ALL sites and ALL services simultaneously (impossible in real traffic), with sharp
-on/off boundaries. NOT real traffic — NOT a public holiday or social event.
-Fix: replace the 01:00–18:00 window with same-slot values from exactly 7 days prior (May 5).
+Data collection system outage from ~01:00 to ~18:00 on May 12. Fix: replace with same-slot
+values from exactly 7 days prior (May 5). Handled by `apply_prev_week_fill()`.
 
 **Voronoi tile-to-gNodeB assignment:**
 Each of the 122k tiles is assigned to the nearest gNodeB using Voronoi tessellation.
@@ -75,7 +82,7 @@ The mapping is stored in `data/graphs/voronoi_map.parquet` (tile_id → site_id)
 
 | Feature | Description |
 |---|---|
-| `dl_norm` | Current normalised total traffic (sum of 3 services) |
+| `dl_norm` | Current normalised total traffic (byte-proportional sum of 3 services) |
 | `dl_norm_lag_96` | Same slot yesterday (96 × 15 min = 24 h back) |
 | `dl_norm_lag_192` | Same slot 2 days ago (192 × 15 min = 48 h back) |
 | `hour_sin`, `hour_cos` | Cyclic time-of-day encoding (slot 0–95 mapped to circle) |
@@ -83,8 +90,8 @@ The mapping is stored in `data/graphs/voronoi_map.parquet` (tile_id → site_id)
 | `is_weekend` | Binary 0/1 |
 
 **Excluded:** month_sin/cos (dataset is only 77 days — insufficient for seasonal learning).
-**Excluded:** short in-window lags (lag_1, lag_2, lag_4) — the LSTM/GRU temporal encoder
-already captures intra-window dependencies; only out-of-window lags add new information.
+**Excluded:** short in-window lags (lag_1, lag_2, lag_4) — the GRU temporal encoder already
+captures intra-window dependencies; only out-of-window lags add new information.
 
 ### 3.2 STGNN Architecture
 
@@ -94,7 +101,7 @@ Temporal-then-spatial design:
 1. **GRU temporal encoder** — processes each node's seq_len-step input series independently
    (all B×N sequences packed into one GRU call for efficiency)
 2. **2-layer Graph Attention Network (GAT)** — mixes information across Voronoi-adjacent
-   gNodeB neighbours; layer 1 uses `num_heads=4` (concat), layer 2 uses 1 head (plain)
+   gNodeB neighbours; layer 1 uses `num_heads=4` (concat → H*4 channels), layer 2 uses 1 head
 3. **Linear output head** — per-node projection from hidden_size → horizon
 
 Key shapes:
@@ -114,32 +121,59 @@ dropout: 0.2
 num_heads: 4
 ```
 
-### 3.3 K=4 UPF Clusters
+**Checkpoint format** — saved as a dict, NOT a plain state_dict:
+```python
+ckpt = torch.load('models/best_model.pt', map_location=device)
+model.load_state_dict(ckpt['model_state'])   # key is 'model_state', not the dict itself
+# Also contains: ckpt['epoch'], ckpt['val_loss'], ckpt['params'], ckpt['feature_cols']
+```
 
-**Why K=4:**
-- Calibration: Netflix city-level peak aggregate = 400 Mbps (from Phase 1 paper)
-- City-level peak across all services: 1341.5 Mbps (computed from dataset)
-- USR×1 UPF saturation threshold: 400 Mbps
-- K = ceil(1341.5 / 400) = **4**
+### 3.3 LSTM Baseline
 
-**Method:** Traffic-weighted k-means on standardised (lat, lon, mean_traffic) features.
-Pure lat/lon k-means produced a single 485-node cluster at ~368 Mbps (near saturation).
-Traffic weighting spreads load more evenly.
+**File:** `src/models/lstm.py` — per-site LSTM with site embedding.
+- Site embedding: `Embedding(965, 16)` concatenated with LSTM hidden state before output head
+- Scaler: StandardScaler fitted on X features only (targets are in original dl_norm space)
+- **DO NOT** pass `scaler` to `evaluate_loader()` for LSTM — targets are already in dl_norm space
+- **DO** pass `scaler` to `evaluate_loader()` for STGNN — targets are in scaled space
 
-**Results** (saved in `data/graphs/upf_clusters.parquet`):
+### 3.4 Training Results (as of this session)
 
-| Cluster | gNodeBs | Peak (Mbps) |
-|---|---|---|
-| 0 | 231 | ~272 |
-| 1 | 302 | ~103 |
-| 2 | 361 | ~91 |
-| 3 | 71 | ~66 |
+| Model | Norm | Hidden | WAPE | SLA (≤20%) | Params |
+|---|---|---|---|---|---|
+| STGNN v1 | distorted | 64 | — | 26.7% | 73,284 |
+| STGNN v2 | distorted | 128 | — | 41.4% | — |
+| STGNN v3 | **fixed** | 64 | **36.2%** | **42.8%** | 73,284 |
+| LSTM baseline | fixed | 128 | 0.9%* | 99.98%* | 219,060 |
 
-Calibration factor: `1 dl_norm_unit = 26.62 Mbps` (saved in `upf_cluster_config.json`).
+*LSTM WAPE/SLA is artificially low: site embeddings memorise each node's pattern (no spatial
+generalisation). At cluster level, STGNN errors cancel out and WAPE improves significantly.
 
-### 3.4 Multi-UPF Control (Scenario A — agreed)
+**Saved model files:**
+- `models/best_model.pt` — STGNN v3 (current best, fixed normalization)
+- `models/scaler.pkl` — STGNN v3 StandardScaler (mean≈0.010, scale≈0.012)
+- `models/best_model_lstm.pt` — LSTM baseline
+- `models/scaler_lstm.pkl` — LSTM StandardScaler (fitted on X only)
+- `models/best_model_stgnn_v1.pt`, `models/scaler_stgnn_v1.pkl` — archived v1
 
-**NOT multi-agent RL.** K=4 independent single-agent MDPs.
+### 3.5 K=? UPF Clusters — BLOCKING DECISION
+
+**Status: under discussion with colleague (as of April 2026).**
+
+Method agreed: pure lat/lon k-means (geographic proximity → low RAN-to-UPF latency).
+Old traffic-weighted clustering is superseded by this decision.
+
+Three options being considered:
+- **Option A (capacity):** K = ⌈653.9 / C_UPF⌉. With C_UPF=400 Mbps → K=2; with 200 Mbps → K=4
+- **Option B (geographic/latency):** fix K by coverage radius (≤5 ms → ≤5 km → K≈4–5) ← **preferred**
+- **Option C (energy-aware):** sweep K and pick best energy savings (requires full control loop first)
+
+**Do not implement clustering until K is decided.**
+The `upf_clusters.parquet` currently has K=4 traffic-weighted clusters — these are stale
+and will be replaced once K is decided and lat/lon k-means is re-run.
+
+### 3.6 Multi-UPF Control (Scenario A — agreed)
+
+**NOT multi-agent RL.** K independent single-agent MDPs.
 
 Each UPF controller:
 - Receives the aggregate cluster-level traffic forecast from the STGNN
@@ -148,7 +182,6 @@ Each UPF controller:
 
 **Justification:** 3GPP TS 23.501 PDU session binding — each UE session is pinned to one
 UPF for its lifetime. Cross-UPF interference doesn't exist at the traffic level.
-PhD contribution is in the STGNN forecaster, not the controller design.
 
 ---
 
@@ -157,13 +190,16 @@ PhD contribution is in the STGNN forecaster, not the controller design.
 ```
 build_graph  ✅  data/graphs/voronoi_map.parquet + bs_locations + graph_edges
 preprocess   ✅  data/netmob/processed/ (79 day-parquets, 77 valid days)
-train        ❌  NOT YET RUN (requires GPU — see Section 6)
-evaluate     ❌  NOT YET RUN
+train        ✅  STGNN v3 trained (28 epochs, early stop). models/best_model.pt
+evaluate     ❌  NOT YET RUN (src/evaluate.py stage not adapted yet)
 ```
 
-**Note:** `dvc.yaml` currently lists only `lstm` deps in the train stage.
-After training runs successfully, update dvc.yaml to add stgnn deps
-(`src/models/stgnn.py`, `data/graphs/edge_index.npy`, `data/graphs/node_index.parquet`).
+**dvc.yaml train stage** — already updated to include STGNN deps:
+```yaml
+deps: [src/train.py, src/dataset.py, src/features.py, src/models/lstm.py,
+       src/models/stgnn.py, src/evaluate.py, data/netmob/processed,
+       data/graphs/edge_index.npy, data/graphs/node_index.parquet]
+```
 
 ---
 
@@ -171,152 +207,101 @@ After training runs successfully, update dvc.yaml to add stgnn deps
 
 ```
 params.yaml                         ← all tunable parameters (single source of truth)
+CLAUDE.md                           ← this file — session memory
 src/
   models/
-    lstm.py                         ← LSTM baseline (working, not yet trained)
-    stgnn.py                        ← STGNN model (GRU + GAT, implemented)
-  dataset.py                        ← TrafficDataset, MultiSiteDataset, GraphTrafficDataset,
-                                       build_datasets(), build_graph_datasets(),
-                                       apply_prev_week_fill()
+    lstm.py                         ← LSTM baseline with site embedding
+    stgnn.py                        ← STGNN model (GRU + GAT), implemented & trained
+  dataset.py                        ← _load_bs_parquets() [byte-proportional norm],
+                                       build_graph_datasets(), apply_prev_week_fill()
   features.py                       ← add_time_features(), add_lag_features(),
-                                       make_sequences(), fit_scaler(), apply_scaler()
-  train.py                          ← unified training loop (lstm + stgnn)
-  evaluate.py                       ← metrics (MAE, RMSE, MAPE, SLA compliance)
+                                       build_site_sequences(), fit_scaler(), apply_scaler()
+  train.py                          ← unified training loop (lstm + stgnn, MLflow logging)
+  evaluate.py                       ← mae, rmse, wape [NOT mape], sla_compliance,
+                                       _inverse_dl_norm(), evaluate_loader(scaler=...)
   aggregate.py                      ← Voronoi assignment, build_graph stage
   preprocess.py                     ← raw tiles → BS-level parquets
   twin.py                           ← Digital Twin adapter (Phase 1 interface)
-  forecast.py                       ← inference wrapper
+  forecast.py                       ← inference wrapper (not yet updated for STGNN)
+  scripts/
+    benchmark_training_speed.py     ← times forward+backward pass per batch
+notebooks/
+  01_analytics.ipynb                ← spatial/temporal data exploration (complete)
+  02_forecasting_analysis.ipynb     ← prediction results, all plots (complete)
+reports/
+  progress_report.tex / .pdf        ← 2-page colleague briefing (gitignored)
 data/
   netmob/
     raw/Lyon/                       ← raw .txt files + GeoJSON + Cartoradio CSV
-    processed/                      ← 79 day-parquets (already BS-level, 3 services)
+    processed/                      ← 79 day-parquets (BS-level, 3 services)
   graphs/
     voronoi_map.parquet             ← tile_id → site_id
     node_index.parquet              ← site_id → node_idx (0-based, canonical ordering)
     edge_index.npy                  ← (2, 5544) int64 — Voronoi adjacency
     edge_attr.npy                   ← (5544,) float32 — inverse distance weights
     bs_locations.parquet            ← site_id, lat, lon
-    upf_clusters.parquet            ← site_id, cluster (0–3), lat, lon, mean_traffic
-    upf_cluster_config.json         ← K, mbps calibration, method metadata
-models/                             ← best_model.pt, scaler.pkl (written by train stage)
-results/                            ← metrics_train.json, metrics_test.json (written by eval)
+    upf_clusters.parquet            ← STALE — will be replaced after K decision
+    upf_cluster_config.json         ← STALE — will be replaced after K decision
+models/                             ← DVC-tracked, gitignored
+  best_model.pt                     ← STGNN v3 checkpoint (dict with 'model_state' key)
+  scaler.pkl                        ← STGNN v3 StandardScaler
+  best_model_lstm.pt                ← LSTM baseline checkpoint
+  scaler_lstm.pkl                   ← LSTM StandardScaler (X only)
+results/                            ← DVC-tracked, gitignored
+  metrics_train.json                ← STGNN v3 test metrics
+  training_log_stgnn_v3_fixednorm.txt
+  training_log_lstm.txt
 ```
 
 ---
 
-## 6. Immediate Next Steps (GPU Server)
+## 6. Immediate Next Steps
 
-### Step 1 — Environment setup
-
+### Step 1 — Decide K (BLOCKING)
+Discuss with colleague. Options in Section 3.5. Once K is decided:
 ```bash
-# Match torch version to your CUDA version, e.g. CUDA 11.8:
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-
-# torch-geometric (match torch + CUDA version):
-pip install torch_geometric
-pip install pyg_lib torch_scatter torch_sparse torch_cluster \
-    -f https://data.pyg.org/whl/torch-2.x.0+cu118.html
-
-# Remaining dependencies (includes dvc[s3] for S3 remote):
-pip install -r requirements.txt
-pip install "dvc[s3]"
+# Re-run lat/lon k-means with agreed K
+python -m src.cluster --method latlon --k <K>    # (script to be written)
+# Update upf_clusters.parquet and upf_cluster_config.json
 ```
 
-### Step 2 — Pull data from DVC S3 remote
-
-The processed data and graph artefacts are stored in an S3 bucket.
-You need AWS credentials configured before pulling.
-
-```bash
-# Configure AWS credentials (one-time, on the GPU server):
-aws configure
-# Enter: Access Key ID, Secret Access Key, region = eu-north-1, output = json
-
-# Then pull all DVC-tracked data:
-dvc pull
-
-# Verify:
-ls data/netmob/processed/   # should show 79 .parquet files
-ls data/graphs/              # should show voronoi_map, node_index, edge_index, etc.
-```
-
-If `dvc pull` fails or AWS credentials are unavailable, re-run the pipeline from raw data:
-```bash
-# Only if you have the raw NetMob files available locally:
-dvc repro build_graph
-dvc repro preprocess
-```
-
-### Step 3 — Run STGNN training
-
-```bash
-# params.yaml already has: training.model: stgnn  and  training.device: auto
-python -m src.train
-```
-
-Expected output:
-```
-[train] Model=stgnn  Device=cuda
-[train] Building graph datasets (this may take ~1 min)...
-[build_graph_datasets] N=965  F=8  Train=XXXX  Val=XXXX  Test=XXXX
-[train] STGNN  N=965  F=8  Params=73,284
-  Epoch    1  train=X.XXXXXX  val=X.XXXXXX  ← best
-  Epoch    2  ...
-```
-
-Loss should decrease steadily. If it plateaus early, try:
-- Increase `stgnn.hidden_size` to 128
-- Increase `training.lr` to 0.003 for first 10 epochs
-
-### Step 4 — Run LSTM baseline (for comparison)
-
-```bash
-# Change params.yaml:  training.model: lstm
-python -m src.train
-# saves to models/best_model.pt — rename first to avoid overwriting STGNN checkpoint
-cp models/best_model.pt models/best_model_lstm.pt
-```
-
-### Step 5 — After training: cluster-level aggregation
-
-The STGNN outputs `(B, N=965, horizon=4)` per-gNodeB forecasts.
-To feed K=4 PPO controllers, aggregate node forecasts to cluster level:
-
+### Step 2 — Implement STGNN → cluster aggregation in src/forecast.py
 ```python
-import pandas as pd, torch
 clusters = pd.read_parquet('data/graphs/upf_clusters.parquet')
-# cluster_load[k] = sum of dl_norm forecasts for all nodes in cluster k
-# Then convert to Mbps: cluster_load_mbps = cluster_load * 26.62
+node_index = pd.read_parquet('data/graphs/node_index.parquet')
+# For each cluster k: sum pred_dl[:, node_idx_k, :] * 26.72 → Mbps signal
 ```
 
-This aggregation step (STGNN → cluster signals → K PPO controllers) is the key
-pipeline that connects Phase 2 forecasting to Phase 1 control logic.
-It is NOT yet implemented — write it in `src/forecast.py` or a new `src/controller.py`.
+### Step 3 — PPO controller (reuse Phase 1 code)
+Wire K independent controllers, each receiving one cluster's STGNN forecast.
+
+### Step 4 — Evaluation
+Compare: Single-UPF DPDK | K-UPF STGNN+PPO | K-UPF LSTM+PPO | oracle
 
 ---
 
 ## 7. Known Issues / Things to Watch
 
-1. **dvc.yaml train stage is incomplete:** It lists `src/models/lstm.py` as a dep but
-   not `stgnn.py` or graph files. Update after confirming training works.
+1. **K clustering is stale:** `upf_clusters.parquet` has old traffic-weighted K=4 clusters.
+   Do not use for PPO until re-done with lat/lon k-means and agreed K.
 
-2. **Cluster 3 is small (71 nodes, ~66 Mbps peak):** This may reflect a real suburban
-   low-load area of Lyon, but check its geographic extent before concluding. If it causes
-   load imbalance in the PPO controller, consider merging into an adjacent cluster (K=3).
+2. **CUDA env on this server:** Do NOT set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+   — GRID A100D-40C virtual GPU does not support CUDA VMM and will crash.
 
-3. **prev_week fill performance:** `apply_prev_week_fill()` loops over NaN entries —
-   it may be slow on first run with the full 77-day dataset (a few minutes). This runs
-   inside `build_graph_datasets()` every training run. If it becomes a bottleneck, cache
-   the filled DataFrame to a parquet file.
+3. **STGNN batch_size must be 4:** GRU workspace ∝ B×N×seq_len×hidden. At batch_size=64,
+   GRU alone needs ~18 GB. Keep batch_size=4 for STGNN.
 
-4. **Scaler is fitted on dl_norm total (sum of 3 services):** The StandardScaler sees
-   values in approximately [0, 3] (sum of three [0,1]-normalised services). This is fine
-   but means the scaler's mean/std should be checked after training — they should be
-   roughly mean≈0.1, std≈0.15 given sparse traffic patterns.
+4. **LSTM batch_size must be 512:** At batch_size=4, LSTM has 1.19M batches/epoch (~3h).
+   Use batch_size=512 (~9300 batches, ~90 sec/epoch).
 
-5. **evaluate.py and forecast.py** are not yet adapted for STGNN outputs. After training,
-   update `src/evaluate.py:evaluate_loader` (already done) and `src/forecast.py` to handle
-   the `(B, N, horizon)` output tensor shape.
+5. **evaluate.py uses WAPE not MAPE:** MAPE explodes on sparse traffic (near-zero denominators).
+   WAPE = Σ|y_true - y_pred| / Σ|y_true| × 100 — robust to near-zero values.
+
+6. **prev_week fill is slow:** `apply_prev_week_fill()` runs inside `build_graph_datasets()`
+   every training run (~a few minutes on 77 days × 965 nodes). Cache if it becomes a bottleneck.
+
+7. **forecast.py not updated for STGNN:** Still handles scalar output. Needs update for
+   (B, N, horizon) tensor shape before evaluation stage can run.
 
 ---
 
@@ -329,22 +314,21 @@ Phase 1 paper:   scalar ρ̂_{t+1}  →  1 PPO controller  →  1 UPF
                  (city-level LSTM)
 
 Phase 2 (this):  per-gNodeB STGNN  →  spatial aggregation  →  K cluster signals
-                  (965-node GAT+GRU)     (Voronoi k-means)    →  K independent PPO controllers
+                  (965-node GRU+GAT)    (lat/lon k-means)    →  K independent PPO controllers
                                                                →  K UPFs
 ```
 
-The STGNN replaces the "Forecasting Module" box in Figure 3 of the Phase 1 paper.
-Everything downstream (PPO controller, Digital Twin profiling models) is reused unchanged.
-
 **Why STGNN over plain LSTM:**
 Neighbouring gNodeBs share load during events (concerts, football matches, commuting peaks).
-A city-level LSTM loses spatial resolution — it cannot distinguish which geographic area
-is peaking. The STGNN captures spatial correlations via GAT message-passing, allowing
-each of the K UPF controllers to receive a geographically meaningful load forecast
-rather than a fraction of the city-level total.
+A city-level LSTM loses spatial resolution. The STGNN captures spatial correlations via GAT
+message-passing, allowing each UPF controller to receive a geographically meaningful forecast.
+LSTM's 0.9% WAPE is misleading — it memorises per-node patterns via site embeddings and cannot
+generalise spatially. STGNN's 36% node-level WAPE improves significantly at cluster level.
 
 **Why GAT over GCN:**
-GAT learns attention weights per edge (per-neighbour importance), which is more expressive
-than GCN's fixed normalised adjacency. In practice, not all Voronoi neighbours are equally
-correlated — a busy commercial district next to a residential area should have different
-message weight than two neighbouring commercial cells.
+GAT learns attention weights per edge (per-neighbour importance). In practice, not all Voronoi
+neighbours are equally correlated — a busy commercial cell next to a residential area should have
+different message weight than two neighbouring commercial cells.
+
+**Calibration chain:**
+dl_norm=1.0 → 26.72 Mbps (node-level) → city peak = 653.9 Mbps (sum of 965 nodes × mean_dl)

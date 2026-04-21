@@ -6,12 +6,12 @@ stages:
     deps:
     - path: data/graphs/voronoi_map.parquet
       hash: md5
-      md5: 2617a6f66b0cbe2a52e0fd50f57bd451
-      size: 333376
+      md5: dec6132e0775c4cb0204bcb518187f10
+      size: 358284
     - path: data/netmob/raw
       hash: md5
-      md5: f5e78549d95dae648cf9b31e94b974b4.dir
-      size: 5758810141
+      md5: 6b28dcba5eaea3c30d105a99410c2957.dir
+      size: 5758810134
       nfiles: 235
     - path: src/netmob_loader.py
       hash: md5
@@ -35,8 +35,8 @@ stages:
     outs:
     - path: data/netmob/processed
       hash: md5
-      md5: 7f4dddb0cf8ccda38231d989af4fe0c6.dir
-      size: 132446150
+      md5: e292bcbe31d4ceacfb53f1ee70647aa5.dir
+      size: 130696848
       nfiles: 79
   build_graph:
     cmd: python -m src.aggregate
@@ -51,8 +51,8 @@ stages:
       size: 993103
     - path: src/aggregate.py
       hash: md5
-      md5: 5c26b079b196050d8c00fbf558d4ec70
-      size: 22603
+      md5: 2f278e2e69e1adeeacd4976e3f92475b
+      size: 23488
     params:
       params.yaml:
         aggregation:
@@ -81,9 +81,98 @@ stages:
       size: 17836
     - path: data/graphs/graph_edges.parquet
       hash: md5
-      md5: 09912c02dbbca58e8380d4c396375d44
-      size: 36776
+      md5: cad5ea34ebb268ba7fcb65f01449d2a9
+      size: 35207
     - path: data/graphs/voronoi_map.parquet
       hash: md5
       md5: dec6132e0775c4cb0204bcb518187f10
       size: 358284
+  train:
+    cmd: python -m src.train
+    deps:
+    - path: data/graphs/edge_index.npy
+      hash: md5
+      md5: 6a68b762e7e4a4b186b45e680a70b7d2
+      size: 88832
+    - path: data/graphs/node_index.parquet
+      hash: md5
+      md5: 4128c79673be367b0d65dcfcd60a75d1
+      size: 13788
+    - path: data/netmob/processed
+      hash: md5
+      md5: e292bcbe31d4ceacfb53f1ee70647aa5.dir
+      size: 130696848
+      nfiles: 79
+    - path: src/dataset.py
+      hash: md5
+      md5: b11156aa4d5bc5e7119523e4e8ddd834
+      size: 17191
+    - path: src/evaluate.py
+      hash: md5
+      md5: 3bf83c0ce562a3c4519b13c7314ac575
+      size: 3140
+    - path: src/features.py
+      hash: md5
+      md5: 57f48845e4229df19274e5d8977ee726
+      size: 5921
+    - path: src/models/lstm.py
+      hash: md5
+      md5: b17c96974b29301c5ca62ab547d579a0
+      size: 4219
+    - path: src/models/stgnn.py
+      hash: md5
+      md5: 4eb28195ed2b0a111578f3e2770fc5c5
+      size: 6917
+    - path: src/train.py
+      hash: md5
+      md5: cb17892df7f30f9bc041e463d85603b4
+      size: 10916
+    params:
+      params.yaml:
+        features:
+          lags:
+          - 96
+          - 192
+          include_time_features: true
+          scaler: standard
+        lstm:
+          seq_len: 96
+          horizon: 4
+          hidden_size: 128
+          num_layers: 2
+          dropout: 0.2
+          bidirectional: false
+        stgnn:
+          seq_len: 96
+          horizon: 4
+          hidden_size: 64
+          num_layers: 2
+          dropout: 0.2
+          num_heads: 4
+          edge_method: knn
+          k_neighbors: 8
+          distance_threshold_m: 2000
+        training:
+          model: stgnn
+          epochs: 100
+          batch_size: 4
+          lr: 0.001
+          lr_scheduler: cosine
+          early_stopping_patience: 15
+          val_fraction: 0.15
+          test_fraction: 0.15
+          seed: 42
+          device: auto
+    outs:
+    - path: models/best_model.pt
+      hash: md5
+      md5: 8771762127548a059c964eeda8103a89
+      size: 300898
+    - path: models/scaler.pkl
+      hash: md5
+      md5: 07189e2a891444aba5596df0b0836c8b
+      size: 608
+    - path: results/metrics_train.json
+      hash: md5
+      md5: 325df56172a928e0f244b1b061e5eadf
+      size: 134

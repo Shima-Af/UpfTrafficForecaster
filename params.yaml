@@ -89,12 +89,13 @@ stgnn:
 
 # --- Training ---
 training:
-  model: stgnn                # lstm | stgnn
+  model: stgnn               # lstm | stgnn
   epochs: 100
-  batch_size: 64
+  batch_size: 4
   lr: 0.001
   lr_scheduler: cosine        # cosine | step | none
-  early_stopping_patience: 10
+  early_stopping_patience: 15
+
   val_fraction: 0.15          # fraction of dates used for validation
   test_fraction: 0.15         # held-out test set (latest dates)
   seed: 42
