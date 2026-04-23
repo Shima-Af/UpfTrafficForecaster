@@ -22,3 +22,6 @@ models/
 
 # Reports — thesis LaTeX source, figures, and compiled PDFs
 reports/
+
+# Claude Code configuration
+.claude/
