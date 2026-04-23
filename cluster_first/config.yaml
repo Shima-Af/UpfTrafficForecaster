@@ -1,0 +1,59 @@
+clustering:
+  n_clusters: 10              # K — default value; sweep overrides this
+  random_state: 42
+  affinity_weights:
+    graph: 0.4                # w1: Voronoi adjacency (geographic proximity)
+    density: 0.3              # w2: RBF on load magnitude features
+    shape: 0.3                # w3: RBF on temporal shape features
+  density_features:
+    - mean_load
+    - peak_load
+    - std_load
+  shape_features:
+    - peak_to_mean
+    - temporal_entropy
+    - coeff_variation
+    - night_day_ratio
+
+coarsening:
+  edge_weight: mean_affinity  # inter-cluster mean affinity as edge weight
+  signal_aggregation: sum     # sum dl_norm across cluster members
+
+stgnn:
+  seq_len: 96                 # 24-hour lookback (96 × 15 min)
+  horizon: 4                  # 1-hour-ahead forecast (4 × 15 min slots)
+  hidden_dim: 64              # smaller than original — K nodes not 965
+  gat_heads: 4
+  gat_layers: 2
+  gru_layers: 1
+  dropout: 0.2
+
+training:
+  epochs: 150
+  lr: 0.001
+  scheduler: cosine
+  early_stopping_patience: 15
+  val_split: 0.15
+  test_split: 0.15
+  batch_size: 32
+  seed: 42
+  sweep_k: [5, 10, 20]        # K values to evaluate in the training sweep
+
+upf:
+  alpha_scenarios:
+    low_density: 0.100        # Gbps per dl_norm=1.0 (sparse deployment)
+    mid_density: 0.200        # Gbps per dl_norm=1.0 (medium density)
+    high_density: 0.500       # Gbps per dl_norm=1.0 (dense urban)
+  threshold_usr_gbps: 0.10    # below this → USR is safe
+  threshold_dpdk_gbps: 0.12   # above this → prefer DPDK
+  threshold_danger_gbps: 0.17 # USR saturation onset — hard constraint
+  energy_dpdk_w: 0.82         # flat DPDK power draw (W)
+  energy_usr_slope: 6.8       # USR power model: P = slope × λ  (W per Gbps)
+
+paths:
+  processed_dir: data/netmob/processed
+  graphs_dir: data/graphs
+  output_dir: data/cluster_first
+  checkpoints_dir: checkpoints/cluster_first
+  results_dir: results/cluster_first
+  figures_dir: figures/cluster_first
