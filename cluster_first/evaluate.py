@@ -27,6 +27,11 @@ Run with:
 from __future__ import annotations
 
 import argparse
+import sys
+# Force UTF-8 output on Windows (cp1252 console cannot encode arrows, dashes, etc.)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple

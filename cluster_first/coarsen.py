@@ -240,21 +240,28 @@ def build_coarsened_graph(
 def verify_coarsening(
     cluster_series: np.ndarray,
     daily_parquets_dir: str | Path,
+    valid_site_ids: set | None = None,
     tol: float = 1e-4,
 ) -> None:
     """
-    Sanity check: the sum of all cluster signals at each timestamp must equal
-    the sum of all BS dl_norm values at that timestamp.
+    Sanity check: the sum of cluster signals at each timestamp must equal
+    the sum of dl_norm for all graph-member BSs at that timestamp.
 
-    This confirms that graph coarsening is lossless — no traffic is dropped
-    or double-counted when forming cluster aggregates.  The pipeline should
-    be aborted if this check fails, as downstream UPF energy estimates would
-    be incorrect.
+    "Graph-member BSs" means those in valid_site_ids (the intersection of
+    parquet site_ids and node_index site_ids).  The parquets may contain BSs
+    that were deliberately excluded from the graph (not in node_index) — those
+    are not part of the conservation guarantee and must be filtered out here.
+
+    This confirms that graph coarsening is lossless for the modelled BSs — no
+    traffic is dropped or double-counted when forming cluster aggregates.
 
     Parameters
     ----------
     cluster_series     : (K, T_total) float32 — summed cluster signals
     daily_parquets_dir : path to data/netmob/processed/
+    valid_site_ids     : set of site_id strings that have cluster assignments;
+                         if None, uses ALL parquet BSs (may mismatch if graph
+                         does not cover all BSs)
     tol                : maximum allowed absolute error per timestamp
 
     Raises
@@ -264,7 +271,11 @@ def verify_coarsening(
     daily_parquets_dir = Path(daily_parquets_dir)
     df = _load_bs_level(daily_parquets_dir)
 
-    # Sum of all BSs at each timestamp
+    # Filter to only the BSs that were actually assigned to clusters
+    if valid_site_ids is not None:
+        df = df[df["site_id"].astype(str).isin(valid_site_ids)]
+
+    # Sum of assigned BSs at each timestamp
     bs_totals = (
         df.groupby("timestamp", sort=True)["dl_norm"]
           .sum()
@@ -284,9 +295,10 @@ def verify_coarsening(
     abs_err = np.abs(bs_totals - cluster_totals)
     max_err = float(abs_err.max())
     mean_err = float(abs_err.mean())
+    status = "PASS" if max_err <= tol else "FAIL"
     print(
         f"[verify_coarsening] max_abs_err={max_err:.6f}  mean_abs_err={mean_err:.6f}  "
-        f"tol={tol}  {'PASS ✓' if max_err <= tol else 'FAIL ✗'}"
+        f"tol={tol}  {status}"
     )
 
     if max_err > tol:

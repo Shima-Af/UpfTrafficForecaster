@@ -21,6 +21,11 @@ Run with:
 
 from __future__ import annotations
 
+import sys
+# Force UTF-8 output on Windows (cp1252 console cannot encode arrows, dashes, etc.)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import argparse
 import json
 import os
@@ -410,7 +415,7 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
               .to_string())
 
         # ---- Step 4b: coarsening ----
-        coarse_ei, coarse_ea, cluster_series, _ = build_coarsened_graph(
+        coarse_ei, coarse_ea, cluster_series, cluster_bs_map = build_coarsened_graph(
             cluster_labels=clustering.labels_,
             adj_matrix_dense=adj_dense,
             affinity_matrix=clustering.affinity_matrix_,
@@ -419,9 +424,18 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
             output_dir=k_output_dir,
         )
 
+        # Build the set of site_ids that actually received cluster assignments.
+        # Some BSs in the parquets are not in node_index (outside graph coverage)
+        # and are deliberately excluded from the model; the conservation check
+        # must compare against the same subset.
+        assigned_site_ids: set = {
+            site for sites in cluster_bs_map.values() for site in sites
+        }
+
         # ---- Step 4c: verify coarsening conservation ----
         try:
-            verify_coarsening(cluster_series, processed_dir)
+            verify_coarsening(cluster_series, processed_dir,
+                              valid_site_ids=assigned_site_ids)
         except AssertionError as e:
             print(f"[train] ABORT: coarsening verification failed for K={K}: {e}")
             continue
