@@ -2,9 +2,9 @@ clustering:
   n_clusters: 10              # K — default value; sweep overrides this
   random_state: 42
   affinity_weights:
-    graph: 0.4                # w1: Voronoi adjacency (geographic proximity)
-    density: 0.3              # w2: RBF on load magnitude features
-    shape: 0.3                # w3: RBF on temporal shape features
+    graph: 0.6                # w1: lat/lon RBF (dense geographic affinity)
+    density: 0.2              # w2: RBF on load magnitude features
+    shape: 0.2                # w3: RBF on temporal shape features
   density_features:
     - mean_load
     - peak_load

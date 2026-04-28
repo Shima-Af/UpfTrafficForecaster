@@ -372,12 +372,26 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
     N = len(node_index_df)
     print(f"[train] Graph: N={N} nodes, E={edge_index_np.shape[1]} edges")
 
+    # ---- Load BS locations (lat/lon) for geographic affinity ----
+    bs_locations_path = graphs_dir / "bs_locations.parquet"
+    if not bs_locations_path.exists():
+        raise FileNotFoundError(f"bs_locations.parquet not found at {bs_locations_path}")
+    bs_locations_df = pd.read_parquet(bs_locations_path)
+    bs_locations_df["site_id"] = bs_locations_df["site_id"].astype(str)
+    # Align to node_index order so rows match bs_stats_df
+    ordered_sites = node_index_df.sort_values("node_idx")["site_id"].tolist()
+    bs_locations_df = (
+        bs_locations_df.set_index("site_id")
+        .reindex(ordered_sites)
+        .reset_index()
+    )
+
     # ---- Compute BS statistics (once — shared across all K values) ----
     print("[train] Computing per-BS statistics ...")
     bs_stats_df = compute_bs_stats(processed_dir, node_index_df)
     print(f"[train] bs_stats_df: {bs_stats_df.shape}")
 
-    # ---- Build fine adj matrix (once — shared across all K values) ----
+    # ---- Build fine adj matrix (once — kept for coarsening edge weights) ----
     adj_dense = build_fine_adj(edge_index_np, edge_attr_np, N)
 
     # ---- K sweep ----
@@ -406,7 +420,7 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
             shape_features=clust_cfg["shape_features"],
             random_state=clust_cfg["random_state"],
         )
-        clustering.fit(bs_stats_df, adj_dense, output_dir=k_output_dir)
+        clustering.fit(bs_stats_df, bs_locations_df, output_dir=k_output_dir)
 
         # Print cluster summary
         cluster_stats = clustering.get_cluster_stats(bs_stats_df)

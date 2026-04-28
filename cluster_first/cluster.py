@@ -83,11 +83,22 @@ class AttributedSpectralClustering:
     def fit(
         self,
         bs_stats_df: pd.DataFrame,
-        adj_matrix_dense: np.ndarray,
+        bs_locations_df: pd.DataFrame,
         output_dir: str | Path = "data/cluster_first",
     ) -> "AttributedSpectralClustering":
         """
         Compute composite affinity and run spectral clustering.
+
+        The geographic component (A_graph) is a dense lat/lon RBF kernel —
+        every BS pair receives a geographic affinity based on actual distance,
+        not just Voronoi neighbours.  This is critical: the old sparse Voronoi
+        adjacency only connected 5-6 neighbours per BS, so its effective weight
+        was diluted by the dense A_density and A_shape matrices, producing
+        geographically scattered clusters and singletons.
+
+        gamma_geo controls the distance decay.  Default 50 corresponds to
+        sigma ~ 0.1 degrees (~11 km); BSs further than ~20 km apart have
+        near-zero affinity, enforcing geographic compactness.
 
         Saves cluster_assignments.parquet and affinity_matrix.npy to
         output_dir so downstream coarsening can reload them without
@@ -95,11 +106,12 @@ class AttributedSpectralClustering:
 
         Parameters
         ----------
-        bs_stats_df      : DataFrame indexed by site_id (string), columns
-                           must include all density_features and shape_features
-        adj_matrix_dense : (N, N) numpy array of inverse-distance Voronoi
-                           edge weights; rows/cols ordered by node_index order
-        output_dir       : directory for saved artefacts
+        bs_stats_df    : DataFrame indexed by site_id (string), columns must
+                         include all density_features and shape_features.
+                         Rows must be in node_index order (same as bs_locations_df).
+        bs_locations_df: DataFrame with columns [site_id, lat, lon], indexed
+                         or aligned to the same node order as bs_stats_df.
+        output_dir     : directory for saved artefacts
 
         Returns
         -------
@@ -108,14 +120,14 @@ class AttributedSpectralClustering:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        N = adj_matrix_dense.shape[0]
-        if N != len(bs_stats_df):
+        N = len(bs_stats_df)
+        if N != len(bs_locations_df):
             raise ValueError(
-                f"adj_matrix_dense has {N} nodes but bs_stats_df has "
-                f"{len(bs_stats_df)} rows — they must match."
+                f"bs_stats_df has {N} rows but bs_locations_df has "
+                f"{len(bs_locations_df)} rows — they must match."
             )
 
-        # ---- Step 1–2: standardise feature blocks ----
+        # ---- Step 1-2: standardise feature blocks ----
         scaler_density = StandardScaler()
         scaler_shape   = StandardScaler()
 
@@ -127,16 +139,18 @@ class AttributedSpectralClustering:
         )
 
         # ---- Step 3: RBF affinity matrices ----
-        A_density = rbf_kernel(X_density, gamma=1.0)   # (N, N), ∈ [0, 1]
-        A_shape   = rbf_kernel(X_shape,   gamma=1.0)   # (N, N), ∈ [0, 1]
+        A_density = rbf_kernel(X_density, gamma=1.0)   # (N, N), in [0, 1]
+        A_shape   = rbf_kernel(X_shape,   gamma=1.0)   # (N, N), in [0, 1]
 
-        # ---- Step 4: normalise graph adjacency to [0, 1] ----
-        adj_max = adj_matrix_dense.max()
-        if adj_max == 0:
-            raise ValueError("adj_matrix_dense is all zeros — check edge data.")
-        A_graph = adj_matrix_dense / adj_max            # (N, N), ∈ [0, 1]
+        # ---- Step 4: dense geographic affinity from lat/lon ----
+        # gamma=50 -> sigma~0.1 deg (~11 km): BSs >20 km apart get ~0 affinity,
+        # ensuring clusters are geographically compact contiguous zones.
+        # This replaces the sparse Voronoi adjacency which caused scattered
+        # singletons because it only connected 5-6 neighbours per BS.
+        coords  = bs_locations_df[["lat", "lon"]].values.astype(np.float64)
+        A_graph = rbf_kernel(coords, gamma=50.0)        # (N, N), in [0, 1]
 
-        # ---- Step 5–6: composite affinity, symmetrised ----
+        # ---- Step 5-6: composite affinity, symmetrised ----
         A = (
             self.w_graph   * A_graph   +
             self.w_density * A_density +
