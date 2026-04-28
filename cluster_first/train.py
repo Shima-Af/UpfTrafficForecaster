@@ -43,7 +43,7 @@ from scipy.stats import entropy as scipy_entropy
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from cluster_first.cluster import AttributedSpectralClustering
+from cluster_first.cluster import AttributedSpectralClustering, SkaterGeographicClustering
 from cluster_first.coarsen import build_coarsened_graph, verify_coarsening
 from cluster_first.dataset import ClusterTrafficDataset
 from cluster_first.model import ClusterSTGNN
@@ -411,22 +411,37 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
         k_ckpt_dir.mkdir(parents=True, exist_ok=True)
 
         # ---- Step 4a: clustering ----
-        clustering = AttributedSpectralClustering(
-            n_clusters=K,
-            w_graph=clust_cfg["affinity_weights"]["graph"],
-            w_density=clust_cfg["affinity_weights"]["density"],
-            w_shape=clust_cfg["affinity_weights"]["shape"],
-            density_features=clust_cfg["density_features"],
-            shape_features=clust_cfg["shape_features"],
-            random_state=clust_cfg["random_state"],
-        )
-        clustering.fit(bs_stats_df, bs_locations_df, output_dir=k_output_dir)
+        method = clust_cfg.get("method", "skater")
+
+        if method == "skater":
+            clustering = SkaterGeographicClustering(
+                n_clusters=K,
+                floor=clust_cfg.get("skater", {}).get("floor", 3),
+                random_state=clust_cfg["random_state"],
+            )
+            clustering.fit(
+                bs_stats_df, bs_locations_df, edge_index_np,
+                output_dir=k_output_dir,
+            )
+        else:
+            clustering = AttributedSpectralClustering(
+                n_clusters=K,
+                w_graph=clust_cfg["affinity_weights"]["graph"],
+                w_density=clust_cfg["affinity_weights"]["density"],
+                w_shape=clust_cfg["affinity_weights"]["shape"],
+                density_features=clust_cfg["density_features"],
+                shape_features=clust_cfg["shape_features"],
+                random_state=clust_cfg["random_state"],
+            )
+            clustering.fit(bs_stats_df, bs_locations_df, output_dir=k_output_dir)
 
         # Print cluster summary
         cluster_stats = clustering.get_cluster_stats(bs_stats_df)
+        summary_cols = ["n_members", "mean_load", "peak_load"]
+        if "dominant_shape" in cluster_stats.columns:
+            summary_cols.append("dominant_shape")
         print("\nCluster summary:")
-        print(cluster_stats[["n_members", "mean_load", "peak_load", "dominant_shape"]]
-              .to_string())
+        print(cluster_stats[summary_cols].to_string())
 
         # ---- Step 4b: coarsening ----
         coarse_ei, coarse_ea, cluster_series, cluster_bs_map = build_coarsened_graph(

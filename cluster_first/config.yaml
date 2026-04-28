@@ -1,7 +1,10 @@
 clustering:
+  method: skater              # 'skater' (geographic MST) | 'spectral' (attributed)
   n_clusters: 10              # K — default value; sweep overrides this
   random_state: 42
-  affinity_weights:
+  skater:
+    floor: 3                  # minimum BSs per cluster (prevents singletons)
+  affinity_weights:           # used only when method=spectral
     graph: 0.6                # w1: lat/lon RBF (dense geographic affinity)
     density: 0.2              # w2: RBF on load magnitude features
     shape: 0.2                # w3: RBF on temporal shape features
