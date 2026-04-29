@@ -6,11 +6,12 @@ DVC pipeline stage: raw NetMob tiles → BS-level normalised Parquet.
 Pipeline
 --------
 1. Load Voronoi map (output of build_graph stage).
-2. For each day and service:
+2. Pass 1 — find the global max BS-level traffic value across ALL services, days, BSs.
+3. Pass 2 — for each day and service:
    a. Parse raw tile-level .txt file.
    b. Aggregate tiles to BS level (sum over each Voronoi cell).
-   c. Normalise with a per-service global-max scale factor.
-3. Write one Parquet per day containing all services.
+   c. Normalise by the single global_max.
+4. Write one Parquet per day containing all services.
 
 Input layout
 ------------
@@ -21,21 +22,22 @@ Output layout
 data/netmob/processed/
     {city}_{YYYYMMDD}.parquet  — one file per day
     manifest.csv               — summary per processed day
-    metadata.json              — per-service scale factors
+    metadata.json              — single global_max scale factor
 
 Each parquet schema
 -------------------
 timestamp  : datetime64[ns]   (local Paris naive time, 15-min resolution)
 site_id    : str              (gNodeB identifier from Cartoradio)
 service    : str              (DailyMotion | Netflix | YouTube)
-dl_norm    : float32          (dimensionless ∈ [0,1], scaled by per-service global max)
+dl_norm    : float32          (dimensionless ∈ [0,1], scaled by global max across all services)
 
 Normalisation
 -------------
-dl_norm = bs_raw_sum / service_scale
+dl_norm = bs_raw_sum / global_max
 where bs_raw_sum is the sum of raw tile values within the Voronoi cell of each BS,
-and service_scale is the dataset-wide maximum of those sums for that service.
-Scale factors are saved to metadata.json.
+and global_max is the dataset-wide maximum across ALL services, BSs, and timestamps.
+Using a single normaliser means services are on a common scale and their dl_norm
+values can be summed or compared directly without any byte-conversion step.
 
 DST handling (20190331)
 -----------------------
@@ -225,10 +227,10 @@ def run(raw_dir: Path, out_dir: Path, graphs_dir: Path, params: dict) -> None:
         raise FileNotFoundError(f"No city directories found under {raw_dir}")
 
     # ------------------------------------------------------------------
-    # Pass 1: compute per-service scale factors at BS level
+    # Pass 1: compute single global_max across ALL services
     # ------------------------------------------------------------------
-    print("[preprocess] Pass 1 — computing per-service BS-level scale factors...")
-    service_maxes: dict[str, list[float]] = {}
+    print("[preprocess] Pass 1 — computing global max across all services and days...")
+    all_bs_maxes: list[float] = []
 
     for city_dir in city_dirs:
         services  = _detect_services(city_dir)
@@ -243,34 +245,30 @@ def run(raw_dir: Path, out_dir: Path, graphs_dir: Path, params: dict) -> None:
                 cell_ids, traffic = result
                 _, bs_traffic = _aggregate_to_bs(cell_ids, traffic, vm_series)
                 if len(bs_traffic) > 0:
-                    service_maxes.setdefault(svc, []).append(float(bs_traffic.max()))
+                    all_bs_maxes.append(float(bs_traffic.max()))
 
-    if not service_maxes:
-        raise RuntimeError("No data found — cannot compute scale factors")
+    if not all_bs_maxes:
+        raise RuntimeError("No data found — cannot compute global max")
 
-    service_scales: dict[str, float] = {}
-    for svc, maxes in service_maxes.items():
-        if norm_method == "global_max":
-            service_scales[svc] = float(max(maxes))
-        elif norm_method == "percentile":
-            service_scales[svc] = float(np.percentile(maxes, norm_percentile))
-        else:
-            raise ValueError(f"Unknown normalization method: {norm_method}")
-        print(f"[preprocess] {svc} scale ({norm_method}): {service_scales[svc]:.4f}")
+    if norm_method == "global_max":
+        global_scale = float(max(all_bs_maxes))
+    elif norm_method == "percentile":
+        global_scale = float(np.percentile(all_bs_maxes, norm_percentile))
+    else:
+        raise ValueError(f"Unknown normalization method: {norm_method}")
 
-    # Save metadata
+    print(f"[preprocess] global_max ({norm_method}): {global_scale:.4f}")
+
+    # Save metadata — single scale factor shared by all services
     metadata = {
-        "normalization":            norm_method,
-        "normalization_percentile": norm_percentile,
-        "aggregation_level":        "BS (Voronoi sum)",
-        "services": {
-            svc: {"scale_factor": scale}
-            for svc, scale in service_scales.items()
-        },
+        "normalization":  norm_method,
+        "global_max":     global_scale,
+        "aggregation_level": "BS (Voronoi sum)",
         "note": (
-            "dl_norm = bs_tile_sum / scale_factor (per service). "
+            "dl_norm = bs_tile_sum / global_max (single scale across all services). "
             "bs_tile_sum = sum of raw tile values in the BS Voronoi cell. "
-            "Raw NetMob values are dimensionless privacy-preserving aggregates."
+            "Services share the same normaliser so their dl_norm values are "
+            "directly comparable and summable without byte conversion."
         ),
     }
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -305,10 +303,9 @@ def run(raw_dir: Path, out_dir: Path, graphs_dir: Path, params: dict) -> None:
                 site_ids, bs_traffic = _aggregate_to_bs(cell_ids, traffic, vm_series)
                 if len(site_ids) == 0:
                     continue
-                scale = service_scales[svc]
                 day_dfs.append(
                     _build_day_df(
-                        site_ids, bs_traffic, date_str, scale, fill_missing, svc
+                        site_ids, bs_traffic, date_str, global_scale, fill_missing, svc
                     )
                 )
 

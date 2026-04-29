@@ -23,7 +23,7 @@ fine-grained model, just partitioned into K geographically coherent chunks.
 
 from __future__ import annotations
 
-import json
+import json  # still used for cluster_bs_map JSON save
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -35,30 +35,20 @@ from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
 # Internal helper: load and aggregate parquets to BS level
-# (mirrors src/dataset._load_bs_parquets without importing from src/)
 # ---------------------------------------------------------------------------
 
-def _load_bs_level(processed_dir: Path) -> pd.DataFrame:
+def _load_bs_level(processed_dir: Path, service: str = "total") -> pd.DataFrame:
     """
-    Load all 77 daily parquets and produce a single byte-proportional dl_norm
-    per (site_id, timestamp) — same logic as src/dataset._load_bs_parquets.
+    Load all daily parquets and produce a single dl_norm per (site_id, timestamp).
 
-    Services are first converted back to raw bytes using the per-service
-    scale_factor from metadata.json, summed across services, then
-    re-normalised by the combined global max so dl_norm ∈ [0, 1].
+    Parameters
+    ----------
+    service : "total" to sum all services, or a specific service name
+              (e.g. "Netflix", "YouTube", "DailyMotion").
+
+    With global_max_all_services normalization services share the same scale,
+    so summing is a direct addition — no byte conversion needed.
     """
-    metadata_path = processed_dir / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(
-            f"metadata.json not found at {metadata_path}. "
-            "Expected path: data/netmob/processed/metadata.json"
-        )
-    with open(metadata_path) as f:
-        meta = json.load(f)
-    service_scales: Dict[str, float] = {
-        svc: info["scale_factor"] for svc, info in meta["services"].items()
-    }
-
     parquets = sorted(processed_dir.glob("*.parquet"))
     if not parquets:
         raise FileNotFoundError(
@@ -71,18 +61,15 @@ def _load_bs_level(processed_dir: Path) -> pd.DataFrame:
         frames.append(pd.read_parquet(pq))
     df = pd.concat(frames, ignore_index=True)
 
-    # Convert per-service dl_norm → raw bytes, then sum across services
-    df["dl_bytes"] = df["dl_norm"] * df["service"].map(service_scales)
-    df = (
-        df.groupby(["timestamp", "site_id"], sort=False)["dl_bytes"]
-          .sum()
-          .reset_index()
-    )
+    if service == "total":
+        df = (
+            df.groupby(["timestamp", "site_id"], sort=False)["dl_norm"]
+              .sum()
+              .reset_index()
+        )
+    else:
+        df = df[df["service"] == service][["timestamp", "site_id", "dl_norm"]].copy()
 
-    # Re-normalise to [0, 1] relative to combined peak
-    global_max = float(df["dl_bytes"].max())
-    df["dl_norm"] = (df["dl_bytes"] / global_max).astype("float32")
-    df.drop(columns="dl_bytes", inplace=True)
     df.sort_values(["site_id", "timestamp"], inplace=True)
     return df
 
@@ -98,6 +85,7 @@ def build_coarsened_graph(
     daily_parquets_dir: str | Path,
     node_index_df: pd.DataFrame,
     output_dir: str | Path = "data/cluster_first",
+    service: str = "total",
 ) -> Tuple[torch.Tensor, torch.Tensor, np.ndarray, Dict[int, List[str]]]:
     """
     Build a K-node coarsened graph from the 965-BS fine graph.
@@ -145,7 +133,7 @@ def build_coarsened_graph(
         cluster_bs_map[cluster_id].append(site_id)
 
     # ---- Step 1: build cluster_series (K, T_total) ----
-    df = _load_bs_level(daily_parquets_dir)
+    df = _load_bs_level(daily_parquets_dir, service=service)
     df["cluster_id"] = df["site_id"].map(site2cluster)
 
     # Drop any sites not in node_index (shouldn't happen, but be safe)
@@ -242,6 +230,7 @@ def verify_coarsening(
     daily_parquets_dir: str | Path,
     valid_site_ids: set | None = None,
     tol: float = 1e-4,
+    service: str = "total",
 ) -> None:
     """
     Sanity check: the sum of cluster signals at each timestamp must equal
@@ -269,7 +258,7 @@ def verify_coarsening(
     AssertionError if max absolute error > tol
     """
     daily_parquets_dir = Path(daily_parquets_dir)
-    df = _load_bs_level(daily_parquets_dir)
+    df = _load_bs_level(daily_parquets_dir, service=service)
 
     # Filter to only the BSs that were actually assigned to clusters
     if valid_site_ids is not None:

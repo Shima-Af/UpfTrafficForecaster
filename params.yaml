@@ -1,122 +1,40 @@
 # ============================================================
-# UPF Traffic Forecaster — Runtime Parameters
-# All tunable values live here. Never hardcode in source.
+# UPF Traffic Forecaster — Data Pipeline Parameters
+# Covers: build_graph and preprocess DVC stages.
+# Model / training parameters live in cluster_first/config.yaml
 # ============================================================
 
 # --- NetMob dataset ---
 netmob:
   time_step_s: 900           # 15-min bins (96 slots/day)
-  # Values are privacy-preserving aggregate indicators — dimensionless, no physical unit.
-  # Normalisation is computed from the data itself (see preprocess → normalization).
 
 # --- Lyon grid (NetMob 100×100 m tiles) ---
-# tile_id = row * n_cols + col
-# Origin = top-left corner of tile (row=0, col=0), in WGS84
 grid:
   n_cols: 287
-  n_rows: 426               # ceil(122032 / 287) = 426
+  n_rows: 426
   tile_size_m: 100
-  # Geographic origin (top-left of tile row=0, col=0)
-  # TODO: confirm from NetMob dataset documentation or calibration point
-  origin_lat: 46.062        # approximate — northern edge of Lyon region
-  origin_lon: 4.637         # approximate — western edge
-  # Projection: tiles run South (lat decreases with row) and East (lon increases with col)
+  origin_lat: 46.062
+  origin_lon: 4.637
 
 # --- Base station (gNodeB) aggregation ---
 aggregation:
   geojson_path: data/netmob/raw/Lyon/Lyon.geojson
   bs_csv: data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
   bs_encoding: latin-1
-  # Bounding box to filter sites to Lyon area
   bbox:
     lat_min: 45.60
     lat_max: 45.90
     lon_min: 4.70
     lon_max: 5.05
-  method: voronoi             # voronoi | knn (tile-to-BS assignment method)
-  min_tiles_per_bs: 1         # drop BSs with fewer assigned tiles
-  # Spatial graph edge construction (for STGNN)
-  edge_method: voronoi_border # voronoi_border | knn
-  k_neighbors: 8              # used only when edge_method=knn
+  method: voronoi
+  min_tiles_per_bs: 1
+  edge_method: voronoi_border
+  k_neighbors: 8
 
 # --- Preprocessing ---
 preprocess:
-  resample_interval: null          # null = keep native 15-min
-  cells_subset: null               # null = all cells; list of tile_ids to restrict
+  resample_interval: null
+  cells_subset: null
   fill_missing: ffill
   min_valid_fraction: 0.80
-  # Normalisation: dl_norm = raw_value / scale_factor
-  # scale_factor is saved to data/netmob/processed/metadata.json
-  normalization: global_max        # global_max | percentile
-  normalization_percentile: 99.9   # used only when normalization=percentile
-
-# --- Feature engineering ---
-features:
-  # Only out-of-window lags: same slot yesterday (96) and 2 days ago (192)
-  lags: [96, 192]
-  # Cyclic time encodings: hour_sin/cos, dow_sin/cos, is_weekend (month dropped — only 77 days)
-  include_time_features: true
-  # Normalisation of input features
-  scaler: standard            # standard | minmax | none
-
-# --- Data quality ---
-data_quality:
-  # Known data-collection outage days — values replaced with same-slot previous-week
-  anomaly_dates: ['20190512']
-  fill_cross_day: prev_week   # prev_week | none
-
-# --- LSTM model ---
-lstm:
-  seq_len: 96                 # input sequence length (96 slots = 24 h lookback)
-  horizon: 4                  # forecast horizon (4 slots = 1 h ahead)
-  hidden_size: 128
-  num_layers: 2
-  dropout: 0.2
-  bidirectional: false
-
-# --- STGNN model ---
-stgnn:
-  seq_len: 96
-  horizon: 4
-  hidden_size: 64
-  num_layers: 2
-  dropout: 0.2
-  num_heads: 4                # GAT attention heads
-  # Graph construction
-  edge_method: knn            # knn | threshold_distance
-  k_neighbors: 8              # for knn
-  distance_threshold_m: 2000  # for threshold_distance
-
-# --- Training ---
-training:
-  model: stgnn               # lstm | stgnn
-  epochs: 100
-  batch_size: 4
-  lr: 0.001
-  lr_scheduler: cosine        # cosine | step | none
-  early_stopping_patience: 15
-
-  val_fraction: 0.15          # fraction of dates used for validation
-  test_fraction: 0.15         # held-out test set (latest dates)
-  seed: 42
-  device: auto                # auto | cpu | cuda | mps
-
-# --- Evaluation ---
-evaluation:
-  metrics: [mae, rmse, mape]
-  # SLA-relevant threshold: flag when predicted vs actual diverges by > X%
-  sla_threshold_pct: 20.0
-
-# --- Forecast output ---
-forecast:
-  horizon: 4                  # slots ahead (matches training.horizon)
-  output_dir: results/forecasts
-
-# --- Digital Twin adapter (used by twin.py, NOT by preprocessing) ---
-# c_max defines the deployment scenario: dl_norm=1.0 corresponds to c_max Gbps.
-# Set once per simulation scenario. Has no effect on how NetMob is normalised.
-adapter:
-  c_max_dl_gbps: 10.0         # rated DL capacity of the UPF deployment (Gbps)
-  c_max_ul_gbps: 10.0         # rated UL capacity
-  avg_packet_size_bytes: 1250 # assumed average packet size (matches lab config)
-  interval_sec: 3             # measurement interval (matches lab config)
+  normalization: global_max         # single global max across ALL services

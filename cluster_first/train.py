@@ -80,14 +80,10 @@ def get_device() -> torch.device:
 def compute_bs_stats(
     processed_dir: Path,
     node_index_df: pd.DataFrame,
+    service: str = "total",
 ) -> pd.DataFrame:
     """
-    Compute per-BS traffic statistics from all 77 daily parquets.
-
-    These features describe each BS's load character and are used to build
-    the density and shape affinity matrices in AttributedSpectralClustering.
-    BSs with similar load profiles cluster together, ensuring each UPF
-    handles a coherent traffic mix rather than a random subset.
+    Compute per-BS traffic statistics from all daily parquets.
 
     Features computed
     -----------------
@@ -96,53 +92,35 @@ def compute_bs_stats(
     std_load        : temporal standard deviation
     peak_to_mean    : peak_load / (mean_load + 1e-8)
     temporal_entropy: Shannon entropy of the normalised time distribution
-                      (low = bursty; high = uniformly spread across time)
     coeff_variation : std_load / (mean_load + 1e-8)
-    night_day_ratio : mean load slots 0–23 (00:00–05:45) /
-                      mean load slots 32–79 (08:00–19:45)
-                      (>1 = night-heavy; <1 = day-heavy)
+    night_day_ratio : mean load slots 0–23 / mean load slots 32–79
 
     Parameters
     ----------
     processed_dir : path to data/netmob/processed/
-    node_index_df : DataFrame [site_id, node_idx] — defines the BS set and ordering
-
-    Returns
-    -------
-    DataFrame indexed by site_id (in node_idx order), columns = feature names
+    node_index_df : DataFrame [site_id, node_idx]
+    service       : "total" or a specific service name (Netflix/YouTube/DailyMotion)
     """
-    import json as json_lib
-
-    metadata_path = processed_dir / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(
-            f"metadata.json not found at {metadata_path}"
-        )
-    with open(metadata_path) as f:
-        meta = json_lib.load(f)
-    service_scales: Dict[str, float] = {
-        svc: info["scale_factor"] for svc, info in meta["services"].items()
-    }
-
-    # Load and aggregate all parquets → BS-level dl_norm
-    frames: List[pd.DataFrame] = []
     parquets = sorted(processed_dir.glob("*.parquet"))
     if not parquets:
         raise FileNotFoundError(
             f"No parquets in {processed_dir}. Run `dvc repro preprocess` first."
         )
+
+    frames: List[pd.DataFrame] = []
     for pq in tqdm(parquets, desc="Loading BS stats", unit="day"):
         frames.append(pd.read_parquet(pq))
     df = pd.concat(frames, ignore_index=True)
-    df["dl_bytes"] = df["dl_norm"] * df["service"].map(service_scales)
-    df = (
-        df.groupby(["timestamp", "site_id"], sort=False)["dl_bytes"]
-          .sum()
-          .reset_index()
-    )
-    global_max = float(df["dl_bytes"].max())
-    df["dl_norm"] = (df["dl_bytes"] / global_max).astype("float32")
-    df.drop(columns="dl_bytes", inplace=True)
+
+    # With global_max normalization, dl_norm values are directly summable
+    if service == "total":
+        df = (
+            df.groupby(["timestamp", "site_id"], sort=False)["dl_norm"]
+              .sum()
+              .reset_index()
+        )
+    else:
+        df = df[df["service"] == service][["timestamp", "site_id", "dl_norm"]].copy()
 
     # Add slot-in-day column for night/day ratio
     df["slot"] = df["timestamp"].dt.hour * 4 + df["timestamp"].dt.minute // 15
@@ -345,13 +323,15 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
     print(f"[train] device={device}")
 
     paths        = cfg["paths"]
+    service       = cfg.get("data", {}).get("service", "total")
     processed_dir = Path(paths["processed_dir"])
     graphs_dir    = Path(paths["graphs_dir"])
-    output_dir    = Path(paths["output_dir"])
-    ckpt_dir      = Path(paths["checkpoints_dir"])
-    results_dir   = Path(paths["results_dir"])
+    output_dir    = Path(paths["output_dir"]) / service
+    ckpt_dir      = Path(paths["checkpoints_dir"]) / service
+    results_dir   = Path(paths["results_dir"]) / service
     output_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[train] service={service}")
 
     # ---- Load graph topology ----
     edge_index_path  = graphs_dir / "edge_index.npy"
@@ -387,8 +367,8 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
     )
 
     # ---- Compute BS statistics (once — shared across all K values) ----
-    print("[train] Computing per-BS statistics ...")
-    bs_stats_df = compute_bs_stats(processed_dir, node_index_df)
+    print(f"[train] Computing per-BS statistics (service={service}) ...")
+    bs_stats_df = compute_bs_stats(processed_dir, node_index_df, service=service)
     print(f"[train] bs_stats_df: {bs_stats_df.shape}")
 
     # ---- Build fine adj matrix (once — kept for coarsening edge weights) ----
@@ -451,6 +431,7 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
             daily_parquets_dir=processed_dir,
             node_index_df=node_index_df,
             output_dir=k_output_dir,
+            service=service,
         )
 
         # Build the set of site_ids that actually received cluster assignments.
@@ -464,7 +445,8 @@ def main(config_path: str = "cluster_first/config.yaml") -> None:
         # ---- Step 4c: verify coarsening conservation ----
         try:
             verify_coarsening(cluster_series, processed_dir,
-                              valid_site_ids=assigned_site_ids)
+                              valid_site_ids=assigned_site_ids,
+                              service=service)
         except AssertionError as e:
             print(f"[train] ABORT: coarsening verification failed for K={K}: {e}")
             continue

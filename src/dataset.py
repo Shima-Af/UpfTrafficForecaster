@@ -1,69 +1,54 @@
 """
 dataset.py
 ----------
-PyTorch Dataset and DataLoader wrappers for traffic forecasting.
+Shared data loading and PyTorch Dataset utilities for traffic forecasting.
 
-TrafficDataset  : wraps (X, y) arrays into a PyTorch Dataset
-MultiSiteDataset: builds one dataset from all sites, with site embedding index
-split_by_date   : temporal train/val/test split (no shuffling across time)
-make_loaders    : convenience function → (train_loader, val_loader, test_loader)
+_load_bs_parquets : load processed parquets → single dl_norm per (site_id, timestamp)
+apply_prev_week_fill : fill anomaly dates with previous-week values
+TrafficDataset    : wraps (X, y) arrays into a PyTorch Dataset
+split_by_date     : temporal train/val/test split (no shuffling across time)
+make_loaders      : convenience function → (train_loader, val_loader, test_loader)
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from src.features import (
-    add_time_features,
-    add_lag_features,
-    build_site_sequences,
-    fit_scaler,
-    apply_scaler,
-)
-
 _ONE_WEEK_SLOTS = 96 * 7   # 672 slots = 7 days at 15-min resolution
 
 
-def _load_bs_parquets(processed_dir) -> pd.DataFrame:
+def _load_bs_parquets(processed_dir, service: str = "total") -> pd.DataFrame:
     """
-    Load all processed parquets and produce a single dl_norm per (site_id, timestamp)
-    that is proportional to actual traffic bytes.
+    Load all processed parquets and return a single dl_norm per (site_id, timestamp).
 
-    Each service's dl_norm is scaled back to raw bytes using the per-service
-    scale_factor from metadata.json, then summed across services, then
-    re-normalised by the combined global max so the result is in [0, 1].
+    Parameters
+    ----------
+    processed_dir : path to data/netmob/processed/
+    service       : "total" to sum all services, or a specific service name
+                    (e.g. "Netflix", "YouTube", "DailyMotion") to use that
+                    service's signal only.
 
-    This preserves the true relative byte contribution of each service
-    (Netflix peak >> YouTube peak >> DailyMotion peak).
+    With global_max_all_services normalization all service dl_norm values share
+    the same scale, so summing is a direct addition — no byte conversion needed.
     """
-    import json
-    from pathlib import Path
-
-    metadata_path = Path(processed_dir) / "metadata.json"
-    with open(metadata_path) as f:
-        meta = json.load(f)
-    service_scales = {svc: info["scale_factor"] for svc, info in meta["services"].items()}
-
     frames = []
     for pq in sorted(Path(processed_dir).glob("*.parquet")):
         frames.append(pd.read_parquet(pq))
     df = pd.concat(frames, ignore_index=True)
 
-    # Convert each service's dl_norm back to raw bytes, then sum across services
-    df["dl_bytes"] = df["dl_norm"] * df["service"].map(service_scales)
-    df = (
-        df.groupby(["timestamp", "site_id"], sort=False)["dl_bytes"]
-          .sum()
-          .reset_index()
-    )
-
-    # Re-normalise so dl_norm ∈ [0, 1] relative to the true combined peak
-    global_max = float(df["dl_bytes"].max())
-    df["dl_norm"] = (df["dl_bytes"] / global_max).astype("float32")
-    df.drop(columns="dl_bytes", inplace=True)
+    if service == "total":
+        df = (
+            df.groupby(["timestamp", "site_id"], sort=False)["dl_norm"]
+              .sum()
+              .reset_index()
+        )
+    else:
+        df = df[df["service"] == service][["timestamp", "site_id", "dl_norm"]].copy()
 
     df.sort_values(["site_id", "timestamp"], inplace=True)
     return df
@@ -155,28 +140,6 @@ class TrafficDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-class MultiSiteDataset(Dataset):
-    """
-    Dataset spanning multiple sites.
-
-    Returns (X, y, site_idx) where site_idx is an integer embedding index.
-    """
-
-    def __init__(
-        self,
-        X: np.ndarray,          # (n_total_samples, seq_len, n_features)
-        y: np.ndarray,          # (n_total_samples, horizon)
-        site_indices: np.ndarray,  # (n_total_samples,) int
-    ):
-        self.X    = torch.from_numpy(X)
-        self.y    = torch.from_numpy(y)
-        self.site = torch.from_numpy(site_indices.astype(np.int64))
-
-    def __len__(self) -> int:
-        return len(self.X)
-
-    def __getitem__(self, idx: int):
-        return self.X[idx], self.y[idx], self.site[idx]
 
 
 # ---------------------------------------------------------------------------
@@ -215,266 +178,6 @@ def split_by_date(
     return train_df, val_df, test_df
 
 
-# ---------------------------------------------------------------------------
-# Build all datasets from processed parquet files
-# ---------------------------------------------------------------------------
-
-def build_datasets(
-    processed_dir: str,
-    params: dict,
-    voronoi_map,
-) -> tuple["MultiSiteDataset", "MultiSiteDataset", "MultiSiteDataset", object, list[str]]:
-    """
-    Load processed parquets, aggregate to BS level, engineer features,
-    split by date, build MultiSiteDatasets.
-
-    Parameters
-    ----------
-    processed_dir : path to data/netmob/processed/
-    params        : full params dict
-    voronoi_map   : pd.Series (tile_id → site_id)
-
-    Returns
-    -------
-    train_ds, val_ds, test_ds, scaler, feature_cols
-    """
-    fp = params["features"]
-    tp = params["training"]
-    lp = params["lstm"]
-    dq = params.get("data_quality", {})
-
-    # ---- Load processed parquets (already BS-level; sum across services) ----
-    df = _load_bs_parquets(processed_dir)
-
-    # ---- Cross-day missing value fill (prev-week + anomaly dates) ----
-    if dq.get("fill_cross_day") == "prev_week":
-        anomaly_dates = dq.get("anomaly_dates", [])
-        df = apply_prev_week_fill(df, anomaly_dates=anomaly_dates)
-
-    # ---- Feature engineering ----
-    if fp["include_time_features"]:
-        df = add_time_features(df)
-    df = add_lag_features(df, lags=fp["lags"])
-    df.dropna(inplace=True)
-
-    time_feature_cols = (
-        ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend"]
-        if fp["include_time_features"] else []
-    )
-    lag_cols      = [f"dl_norm_lag_{lag}" for lag in fp["lags"]]
-    feature_cols  = ["dl_norm"] + lag_cols + time_feature_cols
-
-    # ---- Temporal split ----
-    train_df, val_df, test_df = split_by_date(
-        df,
-        val_fraction=tp["val_fraction"],
-        test_fraction=tp["test_fraction"],
-    )
-
-    # ---- Build sequences per site ----
-    seq_len  = lp["seq_len"]
-    horizon  = lp["horizon"]
-    sites    = sorted(df["site_id"].unique())
-    site2idx = {s: i for i, s in enumerate(sites)}
-
-    def _build(split_df):
-        Xs, ys, sidxs = [], [], []
-        for site in sites:
-            if site not in split_df["site_id"].values:
-                continue
-            try:
-                X, y, _ = build_site_sequences(split_df, site, seq_len, horizon, feature_cols)
-            except ValueError:
-                continue
-            Xs.append(X)
-            ys.append(y)
-            sidxs.append(np.full(len(X), site2idx[site], dtype=np.int64))
-        if not Xs:
-            raise RuntimeError("No sequences built — check data and seq_len/horizon")
-        return (
-            np.concatenate(Xs),
-            np.concatenate(ys),
-            np.concatenate(sidxs),
-        )
-
-    X_tr, y_tr, s_tr = _build(train_df)
-    X_va, y_va, s_va = _build(val_df)
-    X_te, y_te, s_te = _build(test_df)
-
-    # ---- Fit scaler on training set ----
-    scaler = fit_scaler(X_tr, method=fp["scaler"])
-    X_tr   = apply_scaler(X_tr, scaler)
-    X_va   = apply_scaler(X_va, scaler)
-    X_te   = apply_scaler(X_te, scaler)
-
-    return (
-        MultiSiteDataset(X_tr, y_tr, s_tr),
-        MultiSiteDataset(X_va, y_va, s_va),
-        MultiSiteDataset(X_te, y_te, s_te),
-        scaler,
-        feature_cols,
-    )
-
-
-class GraphTrafficDataset(Dataset):
-    """
-    Dataset for STGNN training — each sample covers ALL nodes at once.
-
-    Unlike MultiSiteDataset (which yields one site per sample), every
-    sample here is a full graph snapshot: seq_len steps across N nodes.
-
-    Shapes
-    ------
-    X : (n_samples, seq_len, N, n_features)  float32
-    y : (n_samples, N, horizon)              float32
-    """
-
-    def __init__(self, X: np.ndarray, y: np.ndarray):
-        self.X = torch.from_numpy(X)
-        self.y = torch.from_numpy(y)
-
-    def __len__(self) -> int:
-        return len(self.X)
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.X[idx], self.y[idx]
-
-
-# ---------------------------------------------------------------------------
-# Build graph datasets from processed parquets (STGNN)
-# ---------------------------------------------------------------------------
-
-def build_graph_datasets(
-    processed_dir: str,
-    params: dict,
-    voronoi_map,
-    node_index_df,
-) -> tuple["GraphTrafficDataset", "GraphTrafficDataset", "GraphTrafficDataset", object, list[str], int]:
-    """
-    Build train/val/test GraphTrafficDatasets for STGNN training.
-
-    Each sample is one sliding-window slice across ALL N gNodeBs simultaneously.
-    The node ordering follows node_index_df (site_id → node_idx).
-
-    Parameters
-    ----------
-    processed_dir  : path to data/netmob/processed/
-    params         : full params dict
-    voronoi_map    : pd.Series (tile_id → site_id)
-    node_index_df  : pd.DataFrame with columns [site_id, node_idx]
-
-    Returns
-    -------
-    train_ds, val_ds, test_ds, scaler, feature_cols, n_nodes
-    """
-    from src.features import add_time_features, add_lag_features
-
-    fp = params["features"]
-    tp = params["training"]
-    sp = params["stgnn"]
-    dq = params.get("data_quality", {})
-
-    # ---- Load processed parquets (already BS-level; sum across services) ----
-    df = _load_bs_parquets(processed_dir)
-
-    # ---- Cross-day fill ----
-    if dq.get("fill_cross_day") == "prev_week":
-        df = apply_prev_week_fill(df, anomaly_dates=dq.get("anomaly_dates", []))
-
-    # ---- Feature engineering ----
-    if fp["include_time_features"]:
-        df = add_time_features(df)
-    df = add_lag_features(df, lags=fp["lags"])
-    df.dropna(inplace=True)
-
-    time_feature_cols = (
-        ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend"]
-        if fp["include_time_features"] else []
-    )
-    lag_cols     = [f"dl_norm_lag_{lag}" for lag in fp["lags"]]
-    feature_cols = ["dl_norm"] + lag_cols + time_feature_cols
-
-    # ---- Map site_id → node_idx ----
-    site2node = dict(zip(node_index_df["site_id"], node_index_df["node_idx"]))
-    N = len(node_index_df)
-
-    df["node_idx"] = df["site_id"].map(site2node)
-    df = df.dropna(subset=["node_idx"])
-    df["node_idx"] = df["node_idx"].astype(int)
-
-    # ---- Build (T_total, N, F) aligned tensor ----
-    all_timestamps = np.sort(df["timestamp"].unique())
-    T_total        = len(all_timestamps)
-    F              = len(feature_cols)
-    ts2idx         = {ts: i for i, ts in enumerate(all_timestamps)}
-
-    arr = np.zeros((T_total, N, F), dtype=np.float32)
-    t_idx = df["timestamp"].map(ts2idx).values.astype(int)
-    n_idx = df["node_idx"].values
-    arr[t_idx, n_idx, :] = df[feature_cols].values.astype(np.float32)
-
-    # Forward-fill any node-time slots that have no data (zeros → carry last value)
-    for n in range(N):
-        node_arr = arr[:, n, :]          # (T, F)
-        # Find timesteps that were never written (all zeros on dl_norm)
-        zero_mask = node_arr[:, 0] == 0.0
-        if zero_mask.any() and not zero_mask.all():
-            for f_i in range(F):
-                s = pd.Series(node_arr[:, f_i])
-                s[zero_mask] = np.nan
-                node_arr[:, f_i] = s.ffill().bfill().values
-            arr[:, n, :] = node_arr
-
-    # ---- Temporal split by date ----
-    n_test  = max(1, int(T_total * tp["test_fraction"]))
-    n_val   = max(1, int(T_total * tp["val_fraction"]))
-    n_train = T_total - n_val - n_test
-    if n_train <= 0:
-        raise ValueError(f"Not enough timesteps ({T_total}) for given split fractions")
-
-    # ---- Fit scaler on TRAINING portion of the raw (T, N, F) array ----
-    # Fitting on the small (T_train*N, F) array avoids the gigantic
-    # (n_samples * seq_len * N, F) reshape that causes OOM for large graphs.
-    scaler = fit_scaler(arr[:n_train].reshape(-1, F), method=fp["scaler"])
-
-    def _scale_arr(a: np.ndarray) -> np.ndarray:
-        """Apply scaler to (T, N, F) → returns scaled copy."""
-        sh = a.shape
-        return apply_scaler(a.reshape(-1, F), scaler).reshape(sh)
-
-    arr_train = _scale_arr(arr[:n_train])
-    arr_val   = _scale_arr(arr[n_train : n_train + n_val])
-    arr_te    = _scale_arr(arr[n_train + n_val :])
-
-    seq_len = sp["seq_len"]
-    horizon = sp["horizon"]
-
-    def _slide(a: np.ndarray):
-        """Slide window over (T, N, F) → X:(n, seq_len, N, F), y:(n, N, horizon)."""
-        T = len(a)
-        n_samples = T - seq_len - horizon + 1
-        if n_samples <= 0:
-            raise ValueError(f"Split too short ({T}) for seq_len={seq_len}+horizon={horizon}")
-        X = np.stack([a[i      : i + seq_len]          for i in range(n_samples)])  # (n, seq, N, F)
-        y = np.stack([a[i+seq_len : i+seq_len+horizon, :, 0] for i in range(n_samples)])  # (n, hor, N)
-        y = y.transpose(0, 2, 1)   # → (n, N, horizon)
-        return X.astype(np.float32), y.astype(np.float32)
-
-    X_tr, y_tr = _slide(arr_train)
-    X_va, y_va = _slide(arr_val)
-    X_te, y_te = _slide(arr_te)
-
-    print(f"[build_graph_datasets] N={N}  F={F}  "
-          f"Train={len(X_tr)}  Val={len(X_va)}  Test={len(X_te)}")
-
-    return (
-        GraphTrafficDataset(X_tr, y_tr),
-        GraphTrafficDataset(X_va, y_va),
-        GraphTrafficDataset(X_te, y_te),
-        scaler,
-        feature_cols,
-        N,
-    )
 
 
 def make_loaders(

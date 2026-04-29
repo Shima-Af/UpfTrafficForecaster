@@ -14,6 +14,9 @@ stages:
       - data/graphs/voronoi_map.parquet
       - data/graphs/bs_locations.parquet
       - data/graphs/graph_edges.parquet
+      - data/graphs/node_index.parquet
+      - data/graphs/edge_index.npy
+      - data/graphs/edge_attr.npy
 
   preprocess:
     cmd: python -m src.preprocess data/netmob/raw data/netmob/processed data/graphs
@@ -30,45 +33,48 @@ stages:
       - data/netmob/processed
 
   train:
-    cmd: python -m src.train
+    cmd: python -m cluster_first.train
     deps:
-      - src/train.py
+      - cluster_first/train.py
+      - cluster_first/cluster.py
+      - cluster_first/coarsen.py
+      - cluster_first/dataset.py
+      - cluster_first/model.py
       - src/dataset.py
-      - src/features.py
-      - src/models/lstm.py
-      - src/models/stgnn.py
-      - src/evaluate.py
       - data/netmob/processed
-      - data/graphs/edge_index.npy
+      - data/graphs/bs_locations.parquet
       - data/graphs/node_index.parquet
+      - data/graphs/edge_index.npy
+      - data/graphs/edge_attr.npy
     params:
-      - params.yaml:
-          - features
-          - lstm
+      - cluster_first/config.yaml:
+          - data
+          - clustering
+          - coarsening
           - stgnn
           - training
     outs:
-      - models/best_model.pt
-      - models/scaler.pkl
+      - data/cluster_first
+      - checkpoints/cluster_first
     metrics:
-      - results/metrics_train.json:
+      - results/cluster_first/sweep_results.json:
           cache: false
 
   evaluate:
-    cmd: python -m src.evaluate
+    cmd: python -m cluster_first.evaluate
     deps:
-      - src/evaluate.py
-      - src/forecast.py
-      - models/best_model.pt
-      - models/scaler.pkl
-      - data/netmob/processed
+      - cluster_first/evaluate.py
+      - cluster_first/config.yaml
+      - data/cluster_first
+      - checkpoints/cluster_first
+      - data/graphs/bs_locations.parquet
     params:
-      - params.yaml:
-          - evaluation
-          - forecast
-    metrics:
-      - results/metrics_test.json:
+      - cluster_first/config.yaml:
+          - data
+          - upf
+    outs:
+      - results/cluster_first/upf_assignments.parquet:
           cache: false
-    plots:
-      - results/forecast_plots/:
+    metrics:
+      - results/cluster_first/eval_metrics.json:
           cache: false

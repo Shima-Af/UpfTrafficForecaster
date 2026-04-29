@@ -1,3 +1,8 @@
+data:
+  service: total          # total | Netflix | YouTube | DailyMotion
+  anomaly_dates:
+    - '20190512'          # data-collection outage — filled with prev-week values
+
 clustering:
   method: skater              # 'skater' (geographic MST) | 'spectral' (attributed)
   n_clusters: 10              # K — default value; sweep overrides this
