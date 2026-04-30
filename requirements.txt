@@ -12,9 +12,11 @@ shapely>=2.0
 
 # Deep learning
 torch>=2.2
-# torch-geometric and dependencies added when STGNN is implemented:
-# torch-geometric>=2.5
-# torch-scatter torch-sparse (install separately, match torch version)
+torch_geometric>=2.5
+# torch-scatter, torch-sparse, pyg_lib must be installed separately to match
+# the exact torch+CUDA version — see README or use:
+# pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
+#     -f https://data.pyg.org/whl/torch-<VERSION>+cu126.html
 
 # Experiment tracking
 mlflow>=2.10
