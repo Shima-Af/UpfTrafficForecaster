@@ -33,13 +33,13 @@ stages:
       - data/netmob/processed
 
   train:
-    cmd: python -m cluster_first.train
+    cmd: python -m src.train
     deps:
-      - cluster_first/train.py
-      - cluster_first/cluster.py
-      - cluster_first/coarsen.py
-      - cluster_first/dataset.py
-      - cluster_first/model.py
+      - src/train.py
+      - src/cluster.py
+      - src/coarsen.py
+      - src/cluster_dataset.py
+      - src/model.py
       - src/dataset.py
       - data/netmob/processed
       - data/graphs/bs_locations.parquet
@@ -47,7 +47,7 @@ stages:
       - data/graphs/edge_index.npy
       - data/graphs/edge_attr.npy
     params:
-      - cluster_first/config.yaml:
+      - config.yaml:
           - data
           - clustering
           - coarsening
@@ -61,15 +61,15 @@ stages:
           cache: false
 
   evaluate:
-    cmd: python -m cluster_first.evaluate
+    cmd: python -m src.evaluate
     deps:
-      - cluster_first/evaluate.py
-      - cluster_first/config.yaml
+      - src/evaluate.py
+      - config.yaml
       - data/cluster_first
       - checkpoints/cluster_first
       - data/graphs/bs_locations.parquet
     params:
-      - cluster_first/config.yaml:
+      - config.yaml:
           - data
           - upf
     outs:

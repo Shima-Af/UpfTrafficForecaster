@@ -21,7 +21,7 @@ Energy model
     E_DPDK    = energy_dpdk_w          (W)  — flat regardless of load
 
 Run with:
-    python -m cluster_first.evaluate --n_clusters 10 [--config cluster_first/config.yaml]
+    python -m src.evaluate --n_clusters 10 [--config config.yaml]
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from cluster_first.dataset import ClusterTrafficDataset
-from cluster_first.model import ClusterSTGNN
+from src.cluster_dataset import ClusterTrafficDataset
+from src.model import ClusterSTGNN
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ def plot_energy_comparison(
 # Main evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate(n_clusters: int, config_path: str = "cluster_first/config.yaml") -> None:
+def evaluate(n_clusters: int, config_path: str = "config.yaml") -> None:
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
@@ -314,7 +314,7 @@ def evaluate(n_clusters: int, config_path: str = "cluster_first/config.yaml") ->
               output_dir / "cluster_assignments.parquet"]:
         if not p.exists():
             raise FileNotFoundError(
-                f"Required file not found: {p}. Run cluster_first/train.py first."
+                f"Required file not found: {p}. Run src.train first."
             )
 
     device = torch.device("cpu")  # evaluation can always run on CPU
@@ -528,7 +528,7 @@ if __name__ == "__main__":
         help="K — number of clusters (must match a trained checkpoint)"
     )
     parser.add_argument(
-        "--config", default="cluster_first/config.yaml",
+        "--config", default="config.yaml",
         help="Path to config YAML"
     )
     args = parser.parse_args()

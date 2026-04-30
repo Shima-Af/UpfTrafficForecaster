@@ -16,7 +16,7 @@ Execution order:
   5. Print K-sweep comparison table.
 
 Run with:
-    python -m cluster_first.train [--config cluster_first/config.yaml]
+    python -m src.train [--config config.yaml]
 """
 
 from __future__ import annotations
@@ -43,10 +43,10 @@ from scipy.stats import entropy as scipy_entropy
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from cluster_first.cluster import AttributedSpectralClustering, SkaterGeographicClustering
-from cluster_first.coarsen import build_coarsened_graph, verify_coarsening
-from cluster_first.dataset import ClusterTrafficDataset
-from cluster_first.model import ClusterSTGNN
+from src.cluster import AttributedSpectralClustering, SkaterGeographicClustering
+from src.coarsen import build_coarsened_graph, verify_coarsening
+from src.cluster_dataset import ClusterTrafficDataset
+from src.model import ClusterSTGNN
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +313,7 @@ def _mlflow_end(run) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def main(config_path: str = "cluster_first/config.yaml") -> None:
+def main(config_path: str = "config.yaml") -> None:
     # ---- Load config ----
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
@@ -609,8 +609,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="cluster-first STGNN training")
     parser.add_argument(
         "--config",
-        default="cluster_first/config.yaml",
-        help="Path to config YAML (default: cluster_first/config.yaml)",
+        default="config.yaml",
+        help="Path to config YAML (default: config.yaml)",
     )
     args = parser.parse_args()
     main(config_path=args.config)
