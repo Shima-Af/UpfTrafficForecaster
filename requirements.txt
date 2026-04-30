@@ -1,22 +1,22 @@
 # Core data
 pandas>=2.0
 numpy>=1.26
-pyarrow>=14.0          # parquet I/O
+pyarrow>=14.0
 scikit-learn>=1.4
 pyyaml>=6.0
+tqdm>=4.66
 
 # Spatial (Voronoi + gNodeB aggregation)
 scipy>=1.12
-geopandas>=0.14        # optional but recommended for Voronoi clipping
+geopandas>=0.14
 shapely>=2.0
 
 # Deep learning
 torch>=2.2
 torch_geometric>=2.5
-# torch-scatter, torch-sparse, pyg_lib must be installed separately to match
-# the exact torch+CUDA version — see README or use:
-# pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
-#     -f https://data.pyg.org/whl/torch-<VERSION>+cu126.html
+torch_scatter
+torch_sparse
+torch_cluster
 
 # Experiment tracking
 mlflow>=2.10
@@ -25,8 +25,8 @@ dvc[s3]>=3.0
 # Visualisation
 matplotlib>=3.8
 seaborn>=0.13
-plotly>=5.18           # interactive plots in notebooks
-contextily>=1.4        # basemap tiles (OSM, Stamen, …) for matplotlib/geopandas
+plotly>=5.18
+contextily>=1.4
 
 # Notebooks
 jupyter>=1.0
