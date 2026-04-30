@@ -57,7 +57,7 @@ stages:
       - data/cluster_first
       - checkpoints/cluster_first
     metrics:
-      - results/cluster_first/sweep_results.json:
+      - results/cluster_first/total/sweep_results.json:
           cache: false
 
   evaluate:
