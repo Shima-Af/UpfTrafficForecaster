@@ -1,0 +1,212 @@
+schema: '2.0'
+stages:
+  build_graph:
+    cmd: python -m src.aggregate
+    deps:
+    - path: data/netmob/raw/Lyon/Lyon.geojson
+      hash: md5
+      md5: e14bff83acfd4a33f9dd84258f7008db
+      size: 55536234
+    - path: data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
+      hash: md5
+      md5: 8d2b3a1bd183c9395dc558323f125947
+      size: 993103
+    - path: src/aggregate.py
+      hash: md5
+      md5: fa0b9625801972dbafc62b69585cd7b0
+      size: 25081
+    params:
+      params.yaml:
+        aggregation:
+          geojson_path: data/netmob/raw/Lyon/Lyon.geojson
+          bs_csv: data/netmob/raw/Lyon/Lyon_Sites_Cartoradio.csv
+          bs_encoding: latin-1
+          bbox:
+            lat_min: 45.6
+            lat_max: 45.9
+            lon_min: 4.7
+            lon_max: 5.05
+          method: voronoi
+          min_tiles_per_bs: 1
+          edge_method: voronoi_border
+          k_neighbors: 8
+        grid:
+          n_cols: 287
+          n_rows: 426
+          tile_size_m: 100
+          origin_lat: 46.062
+          origin_lon: 4.637
+    outs:
+    - path: data/graphs/bs_locations.parquet
+      hash: md5
+      md5: 9ed38632e61f671e7097a4ddadde1523
+      size: 17836
+    - path: data/graphs/edge_attr.npy
+      hash: md5
+      md5: 01d3bfe69f16e759bc42ec0ccc992e4f
+      size: 11216
+    - path: data/graphs/edge_index.npy
+      hash: md5
+      md5: dd669042f09bdc7bb1a5dcec9630cf78
+      size: 44480
+    - path: data/graphs/graph_edges.parquet
+      hash: md5
+      md5: cad5ea34ebb268ba7fcb65f01449d2a9
+      size: 35207
+    - path: data/graphs/node_index.parquet
+      hash: md5
+      md5: 9e2654afe32cd32544267fc65d5c11ff
+      size: 13926
+    - path: data/graphs/voronoi_map.parquet
+      hash: md5
+      md5: dec6132e0775c4cb0204bcb518187f10
+      size: 358284
+  preprocess:
+    cmd: python -m src.preprocess data/netmob/raw data/netmob/processed 
+      data/graphs
+    deps:
+    - path: data/graphs/voronoi_map.parquet
+      hash: md5
+      md5: dec6132e0775c4cb0204bcb518187f10
+      size: 358284
+    - path: data/netmob/raw
+      hash: md5
+      md5: 6b28dcba5eaea3c30d105a99410c2957.dir
+      size: 5758810134
+      nfiles: 235
+    - path: src/netmob_loader.py
+      hash: md5
+      md5: 3994b3aecfc0956d84f45912e924030f
+      size: 8024
+    - path: src/preprocess.py
+      hash: md5
+      md5: 70bc592bfbb9da7c4c0fd947354903bf
+      size: 13064
+    params:
+      params.yaml:
+        netmob:
+          time_step_s: 900
+        preprocess:
+          resample_interval:
+          cells_subset:
+          fill_missing: ffill
+          min_valid_fraction: 0.8
+          normalization: global_max
+    outs:
+    - path: data/netmob/processed
+      hash: md5
+      md5: a18eb5c918abc6f163c138f1ee6a9155.dir
+      size: 122847602
+      nfiles: 79
+  train:
+    cmd: python -m src.train
+    deps:
+    - path: data/graphs/bs_locations.parquet
+      hash: md5
+      md5: 9ed38632e61f671e7097a4ddadde1523
+      size: 17836
+    - path: data/graphs/edge_attr.npy
+      hash: md5
+      md5: 01d3bfe69f16e759bc42ec0ccc992e4f
+      size: 11216
+    - path: data/graphs/edge_index.npy
+      hash: md5
+      md5: dd669042f09bdc7bb1a5dcec9630cf78
+      size: 44480
+    - path: data/graphs/node_index.parquet
+      hash: md5
+      md5: 9e2654afe32cd32544267fc65d5c11ff
+      size: 13926
+    - path: data/netmob/processed
+      hash: md5
+      md5: a18eb5c918abc6f163c138f1ee6a9155.dir
+      size: 122847602
+      nfiles: 79
+    - path: src/cluster.py
+      hash: md5
+      md5: 22b223723e968fc384f664b9dc485601
+      size: 18744
+    - path: src/cluster_dataset.py
+      hash: md5
+      md5: 5d6ed058398eaed789a28efbe64bab01
+      size: 5583
+    - path: src/coarsen.py
+      hash: md5
+      md5: e73fbcc1aeeec366400deb5bee00ecba
+      size: 11513
+    - path: src/dataset.py
+      hash: md5
+      md5: 7f4c5b61cfa9ef8fd77ee25f08bacd16
+      size: 6782
+    - path: src/model.py
+      hash: md5
+      md5: 1cffa2aae3dfc15b7ffe53e406d7843b
+      size: 11627
+    - path: src/train.py
+      hash: md5
+      md5: f0ea45057e200486d8caffff370ed7ca
+      size: 22401
+    params:
+      config.yaml:
+        clustering:
+          method: skater
+          n_clusters: 10
+          random_state: 42
+          skater:
+            floor: 3
+          affinity_weights:
+            graph: 0.6
+            density: 0.2
+            shape: 0.2
+          density_features:
+          - mean_load
+          - peak_load
+          - std_load
+          shape_features:
+          - peak_to_mean
+          - temporal_entropy
+          - coeff_variation
+          - night_day_ratio
+        coarsening:
+          edge_weight: mean_affinity
+          signal_aggregation: sum
+        data:
+          service: total
+          anomaly_dates:
+          - '20190512'
+        stgnn:
+          seq_len: 96
+          horizon: 4
+          hidden_dim: 64
+          gat_heads: 4
+          gat_layers: 2
+          gru_layers: 1
+          dropout: 0.2
+        training:
+          epochs: 150
+          lr: 0.001
+          scheduler: cosine
+          early_stopping_patience: 15
+          val_split: 0.15
+          test_split: 0.15
+          batch_size: 32
+          seed: 42
+          sweep_k:
+          - 5
+          - 10
+          - 20
+    outs:
+    - path: checkpoints/cluster_first
+      hash: md5
+      md5: 2119072cded05fc2ab3f0e3c8c61732c.dir
+      size: 756831
+      nfiles: 3
+    - path: data/cluster_first
+      hash: md5
+      md5: 4f22e590f78cfb45da714d6d7a181f9e.dir
+      size: 12320504
+      nfiles: 21
+    - path: results/cluster_first/total/sweep_results.json
+      hash: md5
+      md5: 14d71cc0683e174f0e14072bb8c70ea0
+      size: 504
