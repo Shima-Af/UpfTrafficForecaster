@@ -598,4 +598,35 @@ if __name__ == "__main__":
     edges_df.to_parquet(out_dir / "graph_edges.parquet",      index=False, compression="snappy")
     print(f"[aggregate] Saved graph_edges.parquet   ({len(edges_df)} edges)")
 
+    # ------------------------------------------------------------------
+    # Step 8: Derive node_index, edge_index, edge_attr for the STGNN
+    # ------------------------------------------------------------------
+    # node_index: canonical integer index for each active BS (sorted by site_id)
+    node_index = (
+        pd.DataFrame({"site_id": sorted(bs_active["site_id"].astype(str).unique())})
+        .reset_index()
+        .rename(columns={"index": "node_idx"})
+    )
+    node_index.to_parquet(out_dir / "node_index.parquet", index=False, compression="snappy")
+    print(f"[aggregate] Saved node_index.parquet    ({len(node_index)} nodes)")
+
+    site2idx = dict(zip(node_index["site_id"], node_index["node_idx"]))
+    valid_edges = edges_df[
+        edges_df["src_site_id"].astype(str).isin(site2idx) &
+        edges_df["dst_site_id"].astype(str).isin(site2idx)
+    ].copy()
+
+    src_idx  = valid_edges["src_site_id"].astype(str).map(site2idx).values.astype(np.int64)
+    dst_idx  = valid_edges["dst_site_id"].astype(str).map(site2idx).values.astype(np.int64)
+    edge_index = np.stack([src_idx, dst_idx], axis=0)   # (2, E)
+
+    # Edge weight: inverse distance (closer BSs → stronger connection)
+    dist_km   = valid_edges["distance_km"].values.astype(np.float32)
+    edge_attr = 1.0 / np.maximum(dist_km, 1e-6)         # (E,)
+
+    np.save(out_dir / "edge_index.npy", edge_index)
+    np.save(out_dir / "edge_attr.npy",  edge_attr)
+    print(f"[aggregate] Saved edge_index.npy        ({edge_index.shape})")
+    print(f"[aggregate] Saved edge_attr.npy         ({edge_attr.shape})")
+
     print("[aggregate] Done.")
