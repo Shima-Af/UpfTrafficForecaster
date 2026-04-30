@@ -5,8 +5,10 @@ __pycache__/
 .venv/
 venv/
 
-# DVC — data directories are managed by DVC's own .gitignore files
-# Do NOT manually ignore data/ paths here — dvc add handles that automatically
+# DVC-managed data directories — pipeline outputs, not tracked by Git
+data/graphs/
+data/netmob/processed/
+data/cluster_first/
 
 # MLflow
 mlruns/
