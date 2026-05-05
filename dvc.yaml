@@ -60,21 +60,21 @@ stages:
       - results/cluster_first/total/sweep_results.json:
           cache: false
 
-  evaluate:
-    cmd: python -m src.evaluate
+  evaluate_forecast:
+    cmd: python -m src.evaluate_forecast
     deps:
-      - src/evaluate.py
+      - src/evaluate_forecast.py
       - config.yaml
       - data/cluster_first
       - checkpoints/cluster_first
       - data/graphs/bs_locations.parquet
+      - data/graphs/edge_index.npy
+      - data/graphs/node_index.parquet
     params:
       - config.yaml:
           - data
-          - upf
-    outs:
-      - results/cluster_first/upf_assignments.parquet:
-          cache: false
+          - stgnn
+          - training
     metrics:
-      - results/cluster_first/eval_metrics.json:
+      - results/cluster_first/total/forecast_eval_summary.json:
           cache: false

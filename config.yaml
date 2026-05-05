@@ -47,16 +47,12 @@ training:
   seed: 42
   sweep_k: [5, 10, 20]        # K values to evaluate in the training sweep
 
-upf:
-  alpha_scenarios:
-    low_density: 0.100        # Gbps per dl_norm=1.0 (sparse deployment)
-    mid_density: 0.200        # Gbps per dl_norm=1.0 (medium density)
-    high_density: 0.500       # Gbps per dl_norm=1.0 (dense urban)
-  threshold_usr_gbps: 0.10    # below this → USR is safe
-  threshold_dpdk_gbps: 0.12   # above this → prefer DPDK
-  threshold_danger_gbps: 0.17 # USR saturation onset — hard constraint
-  energy_dpdk_w: 0.82         # flat DPDK power draw (W)
-  energy_usr_slope: 6.8       # USR power model: P = slope × λ  (W per Gbps)
+mlflow:
+  experiment_name: cluster_first_stgnn_forecasting
+  # tracking_uri: set this or export MLFLOW_TRACKING_URI in your environment.
+  # Leave empty to fall back to a local ./mlruns/ folder (single-machine only).
+  # For shared tracking see MLFLOW_SETUP.md.
+  tracking_uri: ""
 
 paths:
   processed_dir: data/netmob/processed

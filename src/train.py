@@ -279,11 +279,13 @@ def _eval_epoch(
 # MLflow helper
 # ---------------------------------------------------------------------------
 
-def _try_mlflow(run_name: str, params: dict) -> object:
-    """Start an MLflow run if available; return a no-op context otherwise."""
+def _try_mlflow(run_name: str, params: dict, experiment_name: str, tracking_uri: str) -> object:
+    """Start an MLflow run if available; return None otherwise."""
     try:
         import mlflow
-        mlflow.set_experiment("cluster_first_stgnn")
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(experiment_name)
         run = mlflow.start_run(run_name=run_name)
         mlflow.log_params(params)
         return run
@@ -491,15 +493,25 @@ def main(config_path: str = "config.yaml") -> None:
         criterion = nn.L1Loss()   # MAE loss — directly minimises forecast error
 
         # ---- MLflow ----
+        mlflow_cfg = cfg.get("mlflow", {})
         mlflow_run = _try_mlflow(
             run_name=f"cluster_first_K{K}",
+            experiment_name=mlflow_cfg.get("experiment_name", "cluster_first_stgnn_forecasting"),
+            tracking_uri=mlflow_cfg.get("tracking_uri", ""),
             params={
-                "K": K, "hidden_dim": stgnn_cfg["hidden_dim"],
-                "gat_heads": stgnn_cfg["gat_heads"],
-                "gat_layers": stgnn_cfg["gat_layers"],
-                "gru_layers": stgnn_cfg["gru_layers"],
-                "seq_len": seq_len, "horizon": horizon,
-                "lr": train_cfg["lr"], "batch_size": batch_size,
+                "K":                K,
+                "service":          service,
+                "clustering_method": method,
+                "hidden_dim":       stgnn_cfg["hidden_dim"],
+                "gat_heads":        stgnn_cfg["gat_heads"],
+                "gat_layers":       stgnn_cfg["gat_layers"],
+                "gru_layers":       stgnn_cfg["gru_layers"],
+                "dropout":          stgnn_cfg["dropout"],
+                "seq_len":          seq_len,
+                "horizon":          horizon,
+                "lr":               train_cfg["lr"],
+                "batch_size":       batch_size,
+                "seed":             train_cfg["seed"],
             },
         )
 
