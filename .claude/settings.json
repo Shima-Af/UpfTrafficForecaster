@@ -4,7 +4,8 @@
       "Bash(python3 -c \"import json; nb=json.load\\(open\\('/home/ubuntu/UPF_forecaster/UpfTrafficForecaster/notebooks/01_analytics.ipynb'\\)\\); print\\('cells:', len\\(nb['cells']\\)\\); [print\\(c['cell_type'], ':', c['source'][:80] if c['source'] else ''\\) for c in nb['cells'][:5]]\")",
       "Bash(python3 -c ' *)",
       "Bash(python build_notebook.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python3 -c \"import pandas as pd; df = pd.read_parquet\\('c:/Users/Shima/Desktop/UPF_DigitalTwin/data/graphs/node_index.parquet'\\); print\\('Schema/Columns:'\\); print\\(df.dtypes\\); print\\('\\\\nShape:', df.shape\\); print\\('\\\\nFirst few rows:'\\); print\\(df.head\\(\\)\\)\")"
     ]
   }
 }
