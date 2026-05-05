@@ -910,6 +910,8 @@ def main() -> None:
     output_base   = Path(paths["output_dir"])      / service
     ckpt_base     = Path(paths["checkpoints_dir"]) / service
     results_base  = Path(paths["results_dir"])     / service
+    # ---- Separate summary results path (hardcoded to 'total' for DVC) ----
+    summary_results_base = Path(paths["results_dir"]) / "total"
     figures_base  = Path(paths["figures_dir"])     / service
     graphs_dir    = Path(paths["graphs_dir"])
     processed_dir = Path(paths["processed_dir"])
@@ -970,18 +972,36 @@ def main() -> None:
     else:
         print(f"\n[evaluate_forecast] Best-K selection: {best_k_info.get('reason')}")
 
-    # ---- Combined summary ----
+    # ---- Combined summary with safety fallback ----
     summary_obj: Dict[str, Any] = {
         "service":  service,
         "sweep_k":  sweep_k,
         "best_k":   best_k_info,
         "results":  summaries,
     }
-    results_base.mkdir(parents=True, exist_ok=True)
-    summary_path = results_base / "forecast_eval_summary.json"
-    with open(summary_path, "w", encoding="utf-8") as fh:
-        json.dump(summary_obj, fh, indent=2)
-    print(f"[evaluate_forecast] Summary saved → {summary_path}")
+    summary_results_base.mkdir(parents=True, exist_ok=True)
+    summary_path = summary_results_base / "forecast_eval_summary.json"
+    try:
+        with open(summary_path, "w", encoding="utf-8") as fh:
+            json.dump(summary_obj, fh, indent=2)
+        print(f"[evaluate_forecast] Summary saved → {summary_path}")
+    except Exception as e:
+        print(f"[evaluate_forecast] WARNING: Failed to save summary to {summary_path}: {e}")
+        print(f"[evaluate_forecast] Creating fallback empty summary...")
+        try:
+            summary_results_base.mkdir(parents=True, exist_ok=True)
+            with open(summary_path, "w", encoding="utf-8") as fh:
+                json.dump({
+                    "service": service,
+                    "sweep_k": sweep_k,
+                    "best_k": best_k_info,
+                    "results": [],
+                    "error": str(e)
+                }, fh, indent=2)
+            print(f"[evaluate_forecast] Fallback summary created at {summary_path}")
+        except Exception as e2:
+            print(f"[evaluate_forecast] ERROR: Could not create fallback summary: {e2}")
+            raise
 
     # ---- MLflow logging (one eval run per K) ----
     for k_val, result in completed:

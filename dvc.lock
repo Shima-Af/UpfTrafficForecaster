@@ -144,8 +144,8 @@ stages:
       size: 11627
     - path: src/train.py
       hash: md5
-      md5: f0ea45057e200486d8caffff370ed7ca
-      size: 22401
+      md5: ac8024911eaac1d8ea9cae7271b797d2
+      size: 23972
     params:
       config.yaml:
         clustering:
@@ -171,7 +171,7 @@ stages:
           edge_weight: mean_affinity
           signal_aggregation: sum
         data:
-          service: total
+          service: Netflix
           anomaly_dates:
           - '20190512'
         stgnn:
@@ -198,15 +198,80 @@ stages:
     outs:
     - path: checkpoints/cluster_first
       hash: md5
-      md5: 2119072cded05fc2ab3f0e3c8c61732c.dir
-      size: 756831
+      md5: d8a6454a95c504871d6ab0f6ed955b5c.dir
+      size: 756063
       nfiles: 3
     - path: data/cluster_first
       hash: md5
-      md5: 4f22e590f78cfb45da714d6d7a181f9e.dir
-      size: 12320504
+      md5: c014386fb977faaf02e5ede1b4049c25.dir
+      size: 12316469
       nfiles: 21
     - path: results/cluster_first/total/sweep_results.json
       hash: md5
-      md5: 14d71cc0683e174f0e14072bb8c70ea0
-      size: 504
+      md5: b97cc279532184870ec8770aee19e1d0
+      size: 506
+  evaluate_forecast:
+    cmd: python -m src.evaluate_forecast
+    deps:
+    - path: checkpoints/cluster_first
+      hash: md5
+      md5: d8a6454a95c504871d6ab0f6ed955b5c.dir
+      size: 756063
+      nfiles: 3
+    - path: config.yaml
+      hash: md5
+      md5: 4d5585336554f183f7acbe6a485cfc83
+      size: 2070
+    - path: data/cluster_first
+      hash: md5
+      md5: c014386fb977faaf02e5ede1b4049c25.dir
+      size: 12316469
+      nfiles: 21
+    - path: data/graphs/bs_locations.parquet
+      hash: md5
+      md5: 9ed38632e61f671e7097a4ddadde1523
+      size: 17836
+    - path: data/graphs/edge_index.npy
+      hash: md5
+      md5: dd669042f09bdc7bb1a5dcec9630cf78
+      size: 44480
+    - path: data/graphs/node_index.parquet
+      hash: md5
+      md5: 9e2654afe32cd32544267fc65d5c11ff
+      size: 13926
+    - path: src/evaluate_forecast.py
+      hash: md5
+      md5: 4fb02da5067ba08909c9da176290c8b7
+      size: 40570
+    params:
+      config.yaml:
+        data:
+          service: Netflix
+          anomaly_dates:
+          - '20190512'
+        stgnn:
+          seq_len: 96
+          horizon: 4
+          hidden_dim: 64
+          gat_heads: 4
+          gat_layers: 2
+          gru_layers: 1
+          dropout: 0.2
+        training:
+          epochs: 150
+          lr: 0.001
+          scheduler: cosine
+          early_stopping_patience: 15
+          val_split: 0.15
+          test_split: 0.15
+          batch_size: 32
+          seed: 42
+          sweep_k:
+          - 5
+          - 10
+          - 20
+    outs:
+    - path: results/cluster_first/total/forecast_eval_summary.json
+      hash: md5
+      md5: bd934bdf4412cb07694acb2f9f6a6db3
+      size: 1641

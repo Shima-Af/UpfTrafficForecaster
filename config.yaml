@@ -1,5 +1,5 @@
 data:
-  service: total          # total | Netflix | YouTube | DailyMotion
+  service: Netflix          # total | Netflix | YouTube | DailyMotion
   anomaly_dates:
     - '20190512'          # data-collection outage — filled with prev-week values
 

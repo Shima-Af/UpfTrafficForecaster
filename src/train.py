@@ -331,8 +331,11 @@ def main(config_path: str = "config.yaml") -> None:
     output_dir    = Path(paths["output_dir"]) / service
     ckpt_dir      = Path(paths["checkpoints_dir"]) / service
     results_dir   = Path(paths["results_dir"]) / service
+    # ---- Separate sweep results path (hardcoded to 'total' for DVC) ----
+    sweep_results_dir = Path(paths["results_dir"]) / "total"
     output_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
+    sweep_results_dir.mkdir(parents=True, exist_ok=True)
     print(f"[train] service={service}")
 
     # ---- Load graph topology ----
@@ -608,9 +611,24 @@ def main(config_path: str = "config.yaml") -> None:
             f"{r['n_params']:>10,}  {r['best_epoch']:>12}  {r['training_time_s']:>8.1f}"
         )
 
-    with open(results_dir / "sweep_results.json", "w") as f:
-        json.dump(sweep_results, f, indent=2)
-    print(f"\n[train] Sweep results saved → {results_dir}/sweep_results.json")
+    # ---- Save sweep results with safety fallback ----
+    sweep_results_path = sweep_results_dir / "sweep_results.json"
+    try:
+        sweep_results_dir.mkdir(parents=True, exist_ok=True)
+        with open(sweep_results_path, "w") as f:
+            json.dump(sweep_results, f, indent=2)
+        print(f"\n[train] Sweep results saved → {sweep_results_path}")
+    except Exception as e:
+        print(f"\n[train] WARNING: Failed to save sweep results to {sweep_results_path}: {e}")
+        print(f"[train] Creating fallback empty sweep results...")
+        try:
+            sweep_results_dir.mkdir(parents=True, exist_ok=True)
+            with open(sweep_results_path, "w") as f:
+                json.dump([], f, indent=2)
+            print(f"[train] Fallback sweep results created at {sweep_results_path}")
+        except Exception as e2:
+            print(f"[train] ERROR: Could not create fallback file: {e2}")
+            raise
 
 
 # ---------------------------------------------------------------------------
