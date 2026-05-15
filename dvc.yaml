@@ -64,6 +64,8 @@ stages:
     cmd: python -m src.evaluate_forecast
     deps:
       - src/evaluate_forecast.py
+      - src/cluster_dataset.py
+      - src/model.py
       - config.yaml
       - data/cluster_first
       - checkpoints/cluster_first
@@ -75,6 +77,8 @@ stages:
           - data
           - stgnn
           - training
+    outs:
+      - results/cluster_first/Netflix
     metrics:
       - results/cluster_first/total/forecast_eval_summary.json:
           cache: false

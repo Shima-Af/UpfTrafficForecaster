@@ -16,11 +16,18 @@ to the downstream orchestration / digital-twin repository.
 
 Outputs
 -------
-results/<service>/K<K>/forecast_eval.json    — per-K detailed results
-results/<service>/K<K>/predictions_test.npy  — raw model predictions (n, horizon, K)
-results/<service>/K<K>/targets_test.npy      — ground-truth targets  (n, horizon, K)
-results/<service>/forecast_eval_summary.json — K-sweep comparison table
-figures/<service>/K<K>/                       — plots
+results/<service>/K<K>/forecast_eval.json     — per-K detailed results
+results/<service>/K<K>/predictions_test.npy   — raw model predictions on test window (n_test, horizon, K)
+results/<service>/K<K>/targets_test.npy       — ground-truth targets on test window  (n_test, horizon, K)
+results/<service>/K<K>/predictions_train.npy  — in-sample model predictions on train window (n_train, horizon, K)
+results/<service>/K<K>/targets_train.npy      — ground-truth targets on train window         (n_train, horizon, K)
+results/<service>/forecast_eval_summary.json  — K-sweep comparison table
+figures/<service>/K<K>/                        — plots
+
+The train-window predictions are in-sample (same checkpoint that was trained on
+this window). They are intended for downstream RL training in UpfRLControllers,
+which uses the train window for PPO episodes and reserves the test window for
+held-out evaluation.
 
 Run with:
     python -m src.evaluate_forecast [--config config.yaml] [--with-coherence]
@@ -592,35 +599,50 @@ def _evaluate_k(
     n_train   = t_total - n_val - n_test
     test_start = n_train + n_val
 
-    test_ds = ClusterTrafficDataset(
-        cluster_series=cluster_series,
-        edge_index=coarse_ei, edge_attr=coarse_ea,
-        seq_len=seq_len, horizon=horizon,
-        split="test",
-        val_split=val_split, test_split=test_split,
-    )
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
-    n_samples = len(test_ds)
+    def _run_inference(split_name: str) -> tuple[np.ndarray, np.ndarray]:
+        """Run the trained model on a given split and return (preds, trues)."""
+        ds = ClusterTrafficDataset(
+            cluster_series=cluster_series,
+            edge_index=coarse_ei, edge_attr=coarse_ea,
+            seq_len=seq_len, horizon=horizon,
+            split=split_name,
+            val_split=val_split, test_split=test_split,
+        )
+        loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
+        p_chunks, t_chunks = [], []
+        with torch.no_grad():
+            for batch in loader:
+                x_b  = batch["x"].to(device)
+                y_b  = batch["y"].to(device)
+                ei_b = batch["edge_index"][0].to(device)
+                ea_b = batch["edge_attr"][0].to(device)
+                p_chunks.append(model(x_b, ei_b, ea_b).cpu())
+                t_chunks.append(y_b.cpu())
+        return (
+            torch.cat(p_chunks, dim=0).numpy(),   # (n, horizon, K)
+            torch.cat(t_chunks, dim=0).numpy(),
+        )
 
-    # ---- Inference ----
-    all_preds, all_trues = [], []
-    with torch.no_grad():
-        for batch in test_loader:
-            x_b   = batch["x"].to(device)
-            y_b   = batch["y"].to(device)
-            ei_b  = batch["edge_index"][0].to(device)
-            ea_b  = batch["edge_attr"][0].to(device)
-            all_preds.append(model(x_b, ei_b, ea_b).cpu())
-            all_trues.append(y_b.cpu())
+    # ---- Test-window inference (held-out for downstream PPO evaluation) ----
+    preds_np, trues_np = _run_inference("test")
+    n_samples = preds_np.shape[0]
 
-    preds_np = torch.cat(all_preds, dim=0).numpy()   # (n, horizon, K)
-    trues_np = torch.cat(all_trues, dim=0).numpy()
+    # ---- Train-window in-sample inference (for downstream PPO training) ----
+    # Same checkpoint, same input-window logic, just applied to the train range.
+    # In-sample is the standard pragmatic choice; walk-forward CV is out of scope.
+    preds_train_np, trues_train_np = _run_inference("train")
 
-    # ---- Save raw predictions ----
+    # ---- Save raw predictions for both splits ----
     k_results_dir.mkdir(parents=True, exist_ok=True)
-    np.save(k_results_dir / "predictions_test.npy", preds_np)
-    np.save(k_results_dir / "targets_test.npy",     trues_np)
-    print(f"[evaluate_forecast] Predictions saved → {k_results_dir}")
+    np.save(k_results_dir / "predictions_test.npy",  preds_np)
+    np.save(k_results_dir / "targets_test.npy",      trues_np)
+    np.save(k_results_dir / "predictions_train.npy", preds_train_np)
+    np.save(k_results_dir / "targets_train.npy",     trues_train_np)
+    print(
+        f"[evaluate_forecast] Predictions saved → {k_results_dir}\n"
+        f"    test:  preds={preds_np.shape}  targets={trues_np.shape}\n"
+        f"    train: preds={preds_train_np.shape}  targets={trues_train_np.shape}"
+    )
 
     # ---- Forecast metrics ----
     model_metrics = _forecast_metrics(preds_np, trues_np)
@@ -865,7 +887,11 @@ def _mlflow_log_eval(
             mlflow.set_tag("is_best_k", str(is_best))
 
             # Artifacts
-            for fname in ["forecast_eval.json", "predictions_test.npy", "targets_test.npy"]:
+            for fname in [
+                "forecast_eval.json",
+                "predictions_test.npy", "targets_test.npy",
+                "predictions_train.npy", "targets_train.npy",
+            ]:
                 p = k_results_dir / fname
                 if p.exists():
                     mlflow.log_artifact(str(p))

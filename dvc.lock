@@ -239,10 +239,18 @@ stages:
       hash: md5
       md5: 9e2654afe32cd32544267fc65d5c11ff
       size: 13926
+    - path: src/cluster_dataset.py
+      hash: md5
+      md5: 5d6ed058398eaed789a28efbe64bab01
+      size: 5583
     - path: src/evaluate_forecast.py
       hash: md5
-      md5: 4fb02da5067ba08909c9da176290c8b7
-      size: 40570
+      md5: c08a2cd1221fe176c20791e3ed1d929e
+      size: 42174
+    - path: src/model.py
+      hash: md5
+      md5: 1cffa2aae3dfc15b7ffe53e406d7843b
+      size: 11627
     params:
       config.yaml:
         data:
@@ -271,6 +279,11 @@ stages:
           - 10
           - 20
     outs:
+    - path: results/cluster_first/Netflix
+      hash: md5
+      md5: 985812611438af6c0eb397cc440d0e5c.dir
+      size: 6835571
+      nfiles: 15
     - path: results/cluster_first/total/forecast_eval_summary.json
       hash: md5
       md5: bd934bdf4412cb07694acb2f9f6a6db3
