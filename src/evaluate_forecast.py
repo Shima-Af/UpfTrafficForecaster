@@ -21,6 +21,8 @@ results/<service>/K<K>/predictions_test.npy   — raw model predictions on test 
 results/<service>/K<K>/targets_test.npy       — ground-truth targets on test window  (n_test, horizon, K)
 results/<service>/K<K>/predictions_train.npy  — in-sample model predictions on train window (n_train, horizon, K)
 results/<service>/K<K>/targets_train.npy      — ground-truth targets on train window         (n_train, horizon, K)
+results/<service>/K<K>/predictions_val.npy    — in-sample model predictions on val window   (n_val, horizon, K)
+results/<service>/K<K>/targets_val.npy        — ground-truth targets on val window           (n_val, horizon, K)
 results/<service>/forecast_eval_summary.json  — K-sweep comparison table
 figures/<service>/K<K>/                        — plots
 
@@ -627,20 +629,25 @@ def _evaluate_k(
     preds_np, trues_np = _run_inference("test")
     n_samples = preds_np.shape[0]
 
-    # ---- Train-window in-sample inference (for downstream PPO training) ----
-    # Same checkpoint, same input-window logic, just applied to the train range.
-    # In-sample is the standard pragmatic choice; walk-forward CV is out of scope.
+    # ---- Train- and val-window in-sample inference (for downstream PPO training) ----
+    # Same checkpoint, same input-window logic, just applied to the train/val ranges.
+    # In-sample on train is the standard pragmatic choice; walk-forward CV is out of scope.
+    # Val predictions let downstream tune hyperparameters without touching the test window.
     preds_train_np, trues_train_np = _run_inference("train")
+    preds_val_np,   trues_val_np   = _run_inference("val")
 
-    # ---- Save raw predictions for both splits ----
+    # ---- Save raw predictions for all three splits ----
     k_results_dir.mkdir(parents=True, exist_ok=True)
     np.save(k_results_dir / "predictions_test.npy",  preds_np)
     np.save(k_results_dir / "targets_test.npy",      trues_np)
     np.save(k_results_dir / "predictions_train.npy", preds_train_np)
     np.save(k_results_dir / "targets_train.npy",     trues_train_np)
+    np.save(k_results_dir / "predictions_val.npy",   preds_val_np)
+    np.save(k_results_dir / "targets_val.npy",       trues_val_np)
     print(
         f"[evaluate_forecast] Predictions saved → {k_results_dir}\n"
         f"    test:  preds={preds_np.shape}  targets={trues_np.shape}\n"
+        f"    val:   preds={preds_val_np.shape}  targets={trues_val_np.shape}\n"
         f"    train: preds={preds_train_np.shape}  targets={trues_train_np.shape}"
     )
 
@@ -889,8 +896,9 @@ def _mlflow_log_eval(
             # Artifacts
             for fname in [
                 "forecast_eval.json",
-                "predictions_test.npy", "targets_test.npy",
+                "predictions_test.npy",  "targets_test.npy",
                 "predictions_train.npy", "targets_train.npy",
+                "predictions_val.npy",   "targets_val.npy",
             ]:
                 p = k_results_dir / fname
                 if p.exists():
