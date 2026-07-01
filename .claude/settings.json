@@ -5,7 +5,15 @@
       "Bash(python3 -c ' *)",
       "Bash(python build_notebook.py)",
       "Bash(python -c ' *)",
-      "Bash(python3 -c \"import pandas as pd; df = pd.read_parquet\\('c:/Users/Shima/Desktop/UPF_DigitalTwin/data/graphs/node_index.parquet'\\); print\\('Schema/Columns:'\\); print\\(df.dtypes\\); print\\('\\\\nShape:', df.shape\\); print\\('\\\\nFirst few rows:'\\); print\\(df.head\\(\\)\\)\")"
+      "Bash(python3 -c \"import pandas as pd; df = pd.read_parquet\\('c:/Users/Shima/Desktop/UPF_DigitalTwin/data/graphs/node_index.parquet'\\); print\\('Schema/Columns:'\\); print\\(df.dtypes\\); print\\('\\\\nShape:', df.shape\\); print\\('\\\\nFirst few rows:'\\); print\\(df.head\\(\\)\\)\")",
+      "Bash(dvc status *)",
+      "Bash(dvc repro *)",
+      "Bash(dvc config *)",
+      "Bash(dvc remote *)",
+      "Bash(dvc push *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

@@ -198,35 +198,35 @@ stages:
     outs:
     - path: checkpoints/cluster_first
       hash: md5
-      md5: d8a6454a95c504871d6ab0f6ed955b5c.dir
-      size: 756063
-      nfiles: 3
+      md5: 244f99322ccc2997b68e99f6d800ad8d.dir
+      size: 4033104
+      nfiles: 16
     - path: data/cluster_first
       hash: md5
-      md5: c014386fb977faaf02e5ede1b4049c25.dir
-      size: 12316469
-      nfiles: 21
+      md5: 38f7abf7f8f2f5e09092f7a27764370e.dir
+      size: 69439233
+      nfiles: 112
     - path: results/cluster_first/total/sweep_results.json
       hash: md5
-      md5: b97cc279532184870ec8770aee19e1d0
-      size: 506
+      md5: 1bc6b42c6a22cc33e16bb94f66c51b02
+      size: 509
   evaluate_forecast:
     cmd: python -m src.evaluate_forecast
     deps:
     - path: checkpoints/cluster_first
       hash: md5
-      md5: d8a6454a95c504871d6ab0f6ed955b5c.dir
-      size: 756063
-      nfiles: 3
+      md5: 244f99322ccc2997b68e99f6d800ad8d.dir
+      size: 4033104
+      nfiles: 16
     - path: config.yaml
       hash: md5
       md5: 4d5585336554f183f7acbe6a485cfc83
       size: 2070
     - path: data/cluster_first
       hash: md5
-      md5: c014386fb977faaf02e5ede1b4049c25.dir
-      size: 12316469
-      nfiles: 21
+      md5: 38f7abf7f8f2f5e09092f7a27764370e.dir
+      size: 69439233
+      nfiles: 112
     - path: data/graphs/bs_locations.parquet
       hash: md5
       md5: 9ed38632e61f671e7097a4ddadde1523
@@ -281,10 +281,10 @@ stages:
     outs:
     - path: results/cluster_first/Netflix
       hash: md5
-      md5: b5127dd9e19a490c5ecf03095d0757d8.dir
-      size: 7966419
-      nfiles: 21
+      md5: 175eec79c37671a3a011696fa146d571.dir
+      size: 56402850
+      nfiles: 70
     - path: results/cluster_first/total/forecast_eval_summary.json
       hash: md5
-      md5: bd934bdf4412cb07694acb2f9f6a6db3
-      size: 1641
+      md5: 1c825965955a16e10aef1d323c5b2878
+      size: 1664

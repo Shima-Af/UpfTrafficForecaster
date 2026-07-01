@@ -1,0 +1,14 @@
+{
+  "service": "Netflix",
+  "K": 10,
+  "files": [
+    "bs_locations.parquet",
+    "cluster_assignments.parquet",
+    "cluster_bs_map.json",
+    "cluster_series.npy",
+    "forecast_eval_summary.json",
+    "predictions_test.npy",
+    "targets_test.npy"
+  ],
+  "consumed_by": "UPF_NDT data/external/traffic_forecaster/"
+}
