@@ -31,3 +31,8 @@ reports/
 # Claude Code configuration
 .claude/
 mlflow.db
+
+# Background-run logs, PIDs, and temp sweep configs (regenerable)
+*.out
+*.pid
+.sweep_tmp/

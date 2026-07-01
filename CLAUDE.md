@@ -1,5 +1,13 @@
 # CLAUDE.md — UPF Digital Twin: Session Memory & Continuation Guide
 
+> ⚠️ **STALE — describes the superseded v1 (per-gNodeB STGNN + LSTM) branch.**
+> The current branch is `cluster-first-stgnn`, which clusters **first** (SKATER → K nodes)
+> and forecasts cluster signals directly. For the accurate, code-verified pipeline see
+> [`PIPELINE.md`](PIPELINE.md). In particular, this branch uses a **single global-max**
+> normaliser with **no per-service byte conversion** (`dl_norm = bs_tile_sum / global_max`,
+> `metadata.json`), and physical units are a downstream scenario concern (`alpha`), not
+> applied here. Ignore the "byte-proportional / 26.72 Mbps" guidance below.
+
 This file is the primary context document for Claude Code sessions on this repository.
 Read it fully before doing anything else. It records the research context, all decisions
 already made, the current state of the codebase, and the immediate next steps.
@@ -56,7 +64,12 @@ service    : str               (DailyMotion | Netflix | YouTube)
 dl_norm    : float32           (∈ [0, 1], normalised by per-service global max)
 ```
 
-**IMPORTANT — normalization fix (implemented, do not revert):**
+**⚠️ SUPERSEDED on `cluster-first-stgnn` — do NOT apply on this branch.** The text below
+describes the old v1 byte-proportional normalization. The current branch uses a single
+global-max normaliser with no byte conversion (see the banner at the top and `PIPELINE.md`).
+Original v1 note follows for history only:
+
+**~~IMPORTANT — normalization fix (implemented, do not revert):~~**
 The raw parquets store per-service dl_norm. Summing directly distorts relative contributions
 (0.5 Netflix ≠ 0.5 YouTube in bytes — Netflix scale_factor is 5× larger).
 Fix in `src/dataset.py:_load_bs_parquets()`: convert each service's dl_norm back to raw bytes

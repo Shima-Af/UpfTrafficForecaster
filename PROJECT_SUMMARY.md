@@ -27,7 +27,7 @@ This module is **Phase 2** of a PhD research system for energy-efficient orchest
 | Spatial units | 965 gNodeBs (Cartoradio, Lyon bbox) covering ~122k 100m×100m tiles |
 | Data schema | `(timestamp, site_id, service, dl_norm)` where `dl_norm ∈ [0,1]` |
 
-**Normalization fix (critical):** Each service's `dl_norm` is first converted back to raw bytes via per-service `scale_factor` (from `metadata.json`), then summed across services, then re-normalized by the combined global max. This ensures Netflix's 5× larger scale does not distort aggregation. Resulting city-level peak: **653.9 Mbps** (26.72 Mbps per dl_norm unit at node level).
+**Normalization (as implemented):** A single global-max normaliser is computed over the pooled raw NetMob values across **all** services (`global_max = 148178608`, stored in `data/netmob/processed/metadata.json`). `dl_norm = bs_tile_sum / global_max`. Because every service shares one normaliser, cluster signals are formed by **directly summing `dl_norm`** across member BSs — there is **no per-service byte conversion**. Raw NetMob values are dimensionless privacy-preserving indicators with no physical unit, so no Mbps/Gbps factor is applied in this repo; mapping `dl_norm → Gbps` is a downstream scenario choice (the controller's `alpha`, see Stage 8 and UPF_NDT `scenario.yaml`).
 
 **Anomaly fix:** May 12, 2019 outage (~01:00–18:00) is filled using same-slot values from May 5 (7 days prior).
 
@@ -54,7 +54,7 @@ This module is **Phase 2** of a PhD research system for energy-efficient orchest
 | | Detail |
 |---|---|
 | **Input** | Raw tile-level `.txt` files (per service, per day) |
-| **Operation** | Aggregate tiles → gNodeBs via Voronoi map; apply byte-proportional normalization; fill May 12 anomaly; write per-day parquets |
+| **Operation** | Aggregate tiles → gNodeBs via Voronoi map; apply single global-max normalization (one normaliser across all services, no byte conversion); fill May 12 anomaly; write per-day parquets |
 | **Output (shapes)** | `Lyon_YYYYMMDD.parquet` × 79 files |
 | | Each file: `(N_valid_rows, 4)` — `(timestamp, site_id, service, dl_norm)` |
 | | After loading all days: dense matrix `(T_total=7392, N=965)` of `dl_norm` |
@@ -178,13 +178,13 @@ num_heads:   4     # GAT attention heads
 After STGNN inference:
 
 ```
-STGNN output:  (B, N=965, horizon=4)   dl_norm per node
+Coarsening (pre-model): sum dl_norm of member BSs → K cluster signals
      ↓
-Voronoi cluster assignment: node_idx → cluster_k
+STGNN input/output:  (B, K, horizon=4)   dl_norm per cluster  (predicted directly)
      ↓
-Aggregate:  sum pred_dl[:, node_idx_k, :] × 26.72  → Mbps signal per cluster
+Export 7 artifacts → data/external/traffic_forecaster/ (consumed by UPF_NDT)
      ↓
-K cluster forecasts:  (B, K, horizon=4)  in Mbps
+Downstream: pred_gbps = pred_norm × alpha   (alpha = 0.12 Gbps/unit, UPF_NDT scenario.yaml)
      ↓
 K independent PPO controllers (one per UPF)
 ```
@@ -202,7 +202,7 @@ K independent PPO controllers (one per UPF)
 | RMSE | `sqrt(mean((y−ŷ)²))` | Penalises large errors |
 | SLA compliance | Fraction of slots where error ≤ 20% | Operational bound |
 
-**Inverse calibration for evaluation:** `dl_norm → Mbps` via `× 26.72`
+**Units:** all forecast metrics are computed in `dl_norm` units (dimensionless). There is no fixed Mbps factor in this repo — physical-unit error depends on the chosen scenario `alpha` and is computed downstream in UPF_NDT as `error_norm × alpha` (`threshold_derivation.load_forecast_mae_gbps`).
 
 ---
 
