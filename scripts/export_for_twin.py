@@ -17,6 +17,7 @@ Exit code is 0 only when every required artifact was found and copied.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -32,6 +33,12 @@ def _sources(service: str, k: int) -> dict[str, Path]:
     graphs = REPO_ROOT / "data" / "graphs"
     summary = REPO_ROOT / "results" / "cluster_first" / "total" / "forecast_eval_summary.json"
     return {
+        # Per-split arrays. The controllers train PPO on the train/val windows
+        # and report on test, so all three splits ship — not just test.
+        "predictions_train.npy":       res / "predictions_train.npy",
+        "targets_train.npy":           res / "targets_train.npy",
+        "predictions_val.npy":         res / "predictions_val.npy",
+        "targets_val.npy":             res / "targets_val.npy",
         "predictions_test.npy":        res / "predictions_test.npy",
         "targets_test.npy":            res / "targets_test.npy",
         "cluster_series.npy":          dat / "cluster_series.npy",
@@ -76,10 +83,19 @@ def main() -> int:
         shutil.copy2(src, out_dir / name)
         print(f"  ✓ {name:<32} ← {src.relative_to(REPO_ROOT)}")
 
+    # Record an md5 per file. Downstream pins these bytes in its own .dvc
+    # files, so the manifest is what lets it verify an import matches the
+    # revision its results were built on.
+    md5s = {
+        name: hashlib.md5((out_dir / name).read_bytes()).hexdigest()
+        for name in sorted(sources)
+    }
+
     (out_dir / "EXPORT_MANIFEST.json").write_text(json.dumps({
         "service": args.service,
         "K": args.k,
         "files": sorted(sources.keys()),
+        "md5": md5s,
         "consumed_by": "UPF_NDT data/external/traffic_forecaster/",
     }, indent=2))
 

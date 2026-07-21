@@ -288,3 +288,30 @@ stages:
       hash: md5
       md5: 1c825965955a16e10aef1d323c5b2878
       size: 1664
+  export_for_twin:
+    cmd: python scripts/export_for_twin.py --service Netflix --k 10
+    deps:
+    - path: data/cluster_first
+      hash: md5
+      md5: 38f7abf7f8f2f5e09092f7a27764370e.dir
+      size: 69439233
+      nfiles: 112
+    - path: data/graphs/bs_locations.parquet
+      hash: md5
+      md5: 9ed38632e61f671e7097a4ddadde1523
+      size: 17836
+    - path: results/cluster_first/Netflix
+      hash: md5
+      md5: 175eec79c37671a3a011696fa146d571.dir
+      size: 56402850
+      nfiles: 70
+    - path: scripts/export_for_twin.py
+      hash: md5
+      md5: 6773e77db1abbe92eb78f8657598f004
+      size: 4511
+    outs:
+    - path: exports/traffic_forecaster
+      hash: md5
+      md5: 6064e7740d396c46a63df87dc9cc7711.dir
+      size: 2610527
+      nfiles: 12

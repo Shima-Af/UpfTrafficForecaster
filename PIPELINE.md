@@ -83,6 +83,28 @@ footprint), not an accuracy-optimal one** — and should be documented as such.
   renormalization (26.72 Mbps/unit, 653.9 Mbps peak). The **implemented** method is plain
   `global_max` with *no byte conversion* (metadata.json + `src/preprocess.py`). Pick one and
   align docs to code.
-- **README.md** still describes the older per-gNodeB **LSTM** design (`src/models/lstm.py`,
-  "stgnn upcoming", MAPE, SLA compliance, ~700 nodes / 54,013 tiles). Current code is the
-  STGNN cluster-first pipeline (965 nodes / ~122k tiles, WAPE, `src/model.py`).
+- ~~**README.md** still describes the older per-gNodeB **LSTM** design~~ — **resolved
+  2026-07-21.** README.md now describes the cluster-first STGNN pipeline (965 nodes,
+  WAPE, `src/model.py`) and documents the downstream export contract. The LSTM it
+  referenced (`src/models/lstm.py`) no longer exists in the tree.
+
+## Downstream export contract
+
+The `export_for_twin` stage stages a flat 11-file bundle into
+`exports/traffic_forecaster/` as a **cached** DVC output, so downstream repos can
+`dvc import` it at a pinned rev instead of hand-copying. It also carries a cached copy
+of `forecast_eval_summary.json`, which is `cache: false` as an `evaluate_forecast`
+metric and therefore exists in no DVC remote in its original location.
+
+The stage is **`frozen: true`**. Its bytes predate the 2026-06-11 K10 retrain and are
+the arrays behind every downstream Phase 2–9 result; they are not reproducible from the
+current tree. `dvc repro` skips it by design. See the `provenance` field of
+`exports/traffic_forecaster/EXPORT_MANIFEST.json` and the README section
+"The bundle is frozen on purpose" before modifying it.
+
+Caveat worth noting: the live `results/cluster_first/total/forecast_eval_summary.json`
+currently holds a **DailyMotion** sweep (`sweep_k: [8,10,15]`), not Netflix — a later
+sweep overwrote it. Because it is `cache: false`, the overwrite was unrecoverable from
+any remote. The Netflix summary survives only inside the frozen export bundle. Re-running
+`evaluate_forecast` for Netflix would regenerate a summary, but from the *retrained*
+checkpoint, so its metrics would not match the published ones.

@@ -82,3 +82,28 @@ stages:
     metrics:
       - results/cluster_first/total/forecast_eval_summary.json:
           cache: false
+
+  # Stages the flat artifact set that UpfRLControllers / UPF_NDT consume, so the
+  # handoff is a `dvc import` at a pinned rev instead of a hand-copy. Note that
+  # forecast_eval_summary.json is cache:false above (so it lives in no remote);
+  # the copy inside exports/ IS cached, which is what makes it fetchable
+  # downstream.
+  #
+  # FROZEN ON PURPOSE. The bytes in exports/traffic_forecaster are the outputs of
+  # the K10 checkpoint as it stood before the 2026-06-11 retrain — the arrays every
+  # downstream Phase 2-9 result and the MASCOTS paper were built on. They are not
+  # reproducible from the current working tree, and the live
+  # results/cluster_first/total/forecast_eval_summary.json has since been
+  # overwritten by a DailyMotion sweep. Unfreezing and running this stage would
+  # silently replace the thesis bundle with current-model bytes. Read
+  # exports/traffic_forecaster/EXPORT_MANIFEST.json ("provenance") first.
+  export_for_twin:
+    cmd: python scripts/export_for_twin.py --service Netflix --k 10
+    frozen: true
+    deps:
+      - scripts/export_for_twin.py
+      - results/cluster_first/Netflix
+      - data/cluster_first
+      - data/graphs/bs_locations.parquet
+    outs:
+      - exports/traffic_forecaster

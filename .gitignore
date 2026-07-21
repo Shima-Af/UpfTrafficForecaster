@@ -36,3 +36,6 @@ mlflow.db
 *.out
 *.pid
 .sweep_tmp/
+
+# Downstream export bundle (DVC-tracked via the export_for_twin stage)
+exports/
