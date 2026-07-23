@@ -25,8 +25,19 @@ models/
 # Training checkpoints (DVC-tracked)
 checkpoints/
 
-# Reports — thesis LaTeX source, figures, and compiled PDFs
-reports/
+# Reports — track the thesis chapter source + figures + built PDF (deliverables);
+# ignore only LaTeX build intermediates.
+reports/*
+!reports/chapter_forecaster.tex
+!reports/chapter_forecaster.pdf
+!reports/figures/
+reports/*.aux
+reports/*.log
+reports/*.out
+reports/*.toc
+reports/*.fls
+reports/*.fdb_latexmk
+reports/*.synctex.gz
 
 # Claude Code configuration
 .claude/
