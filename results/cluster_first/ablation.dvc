@@ -1,0 +1,6 @@
+outs:
+- md5: bb97cd1771351bb114e8db9a9537fafc.dir
+  size: 650
+  nfiles: 1
+  hash: md5
+  path: ablation

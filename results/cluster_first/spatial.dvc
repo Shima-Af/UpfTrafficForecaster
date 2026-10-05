@@ -1,0 +1,6 @@
+outs:
+- md5: 75126b4d24aa37d8802ba4719c56ca05.dir
+  size: 6616
+  nfiles: 4
+  hash: md5
+  path: spatial

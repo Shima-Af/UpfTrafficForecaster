@@ -13,8 +13,11 @@ data/cluster_first/
 # MLflow
 mlruns/
 
-# Results (versioned by DVC)
-results/
+# Results (versioned by DVC): ignore the data, keep the .dvc pointer files
+results/**
+!results/**/
+!results/**/*.dvc
+!results/**/.gitignore
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
